@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "macos-local-mcp"
+version = "0.1.0"
+description = "macOS file and desktop tools over MCP stdio"
+requires-python = ">=3.13"
+license = "MIT"
+readme = "README.md"
+dependencies = [
+  "mcp==1.30.0",
+  "Pillow==12.3.0",
+  "Send2Trash==2.1.0",
+  "psutil==7.1.0",
+  "pyobjc-framework-Quartz>=11.1; sys_platform == 'darwin'",
+  "pyobjc-framework-Cocoa>=11.1; sys_platform == 'darwin'"
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.1.1"]
+
+[project.urls]
+Repository = "https://github.com/yeyiwen2006/macos-local-mcp"
+
+[project.scripts]
+macos-local-mcp = "macos_local_mcp.server:main"
+macos-local-control = "macos_local_mcp.control:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
