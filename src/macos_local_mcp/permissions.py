@@ -19,12 +19,19 @@ def _quartz():
     return Quartz
 
 
+def _application_services():
+    if sys.platform != "darwin":
+        raise PermissionUnavailable("macOS is required")
+    import ApplicationServices
+    return ApplicationServices
+
+
 def accessibility_trusted(*, prompt: bool = False) -> bool:
-    q = _quartz()
-    if prompt and hasattr(q, "AXIsProcessTrustedWithOptions"):
-        option = getattr(q, "kAXTrustedCheckOptionPrompt", "AXTrustedCheckOptionPrompt")
-        return bool(q.AXIsProcessTrustedWithOptions({option: True}))
-    return bool(q.AXIsProcessTrusted())
+    ax = _application_services()
+    if prompt and hasattr(ax, "AXIsProcessTrustedWithOptions"):
+        option = getattr(ax, "kAXTrustedCheckOptionPrompt", "AXTrustedCheckOptionPrompt")
+        return bool(ax.AXIsProcessTrustedWithOptions({option: True}))
+    return bool(ax.AXIsProcessTrusted())
 
 
 def screen_recording_allowed(*, request: bool = False) -> bool:

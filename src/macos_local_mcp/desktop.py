@@ -155,15 +155,17 @@ class _NativeBackend:
             raise DesktopError("Desktop control requires macOS.")
         import AppKit
         import Quartz
+        import ApplicationServices
         self.AppKit = AppKit
         self.Quartz = Quartz
+        self.AX = ApplicationServices
 
     def permission_status(self) -> dict:
         from .permissions import permission_status
         return permission_status()
 
     def _require_accessibility(self) -> None:
-        if not bool(self.Quartz.AXIsProcessTrusted()):
+        if not bool(self.AX.AXIsProcessTrusted()):
             raise DesktopError(
                 "Accessibility permission is required. Grant it locally in System Settings > "
                 "Privacy & Security > Accessibility, then restart the service."
@@ -273,9 +275,9 @@ class _NativeBackend:
         }
 
     def _ax_value(self, element, attribute):
-        q = self.Quartz
+        ax = self.AX
         try:
-            result = q.AXUIElementCopyAttributeValue(element, attribute, None)
+            result = ax.AXUIElementCopyAttributeValue(element, attribute, None)
         except Exception:
             return None
         if isinstance(result, tuple) and len(result) == 2:
@@ -287,13 +289,13 @@ class _NativeBackend:
 
     def focused_window_signature(self, pid: int) -> dict | None:
         self._require_accessibility()
-        q = self.Quartz
-        app = q.AXUIElementCreateApplication(pid)
-        focused = self._ax_value(app, q.kAXFocusedWindowAttribute)
+        ax = self.AX
+        app = ax.AXUIElementCreateApplication(pid)
+        focused = self._ax_value(app, ax.kAXFocusedWindowAttribute)
         if focused is None:
             return None
-        title = self._ax_value(focused, q.kAXTitleAttribute)
-        modal = self._ax_value(focused, getattr(q, "kAXModalAttribute", "AXModal"))
+        title = self._ax_value(focused, ax.kAXTitleAttribute)
+        modal = self._ax_value(focused, getattr(ax, "kAXModalAttribute", "AXModal"))
         title_text = str(title or "")
         candidates = [w for w in self.windows() if w["pid"] == pid]
         chosen = None
@@ -320,13 +322,13 @@ class _NativeBackend:
         options = getattr(self.AppKit, "NSApplicationActivateIgnoringOtherApps", 1 << 1)
         app.activateWithOptions_(options)
 
-        q = self.Quartz
-        ax_app = q.AXUIElementCreateApplication(pid)
-        windows = self._ax_value(ax_app, q.kAXWindowsAttribute) or []
+        ax = self.AX
+        ax_app = ax.AXUIElementCreateApplication(pid)
+        windows = self._ax_value(ax_app, ax.kAXWindowsAttribute) or []
         target_title = record.get("title") or ""
         candidate = None
         for ax_window in windows:
-            title = self._ax_value(ax_window, q.kAXTitleAttribute)
+            title = self._ax_value(ax_window, ax.kAXTitleAttribute)
             if target_title and str(title or "") == target_title:
                 candidate = ax_window
                 break
@@ -334,11 +336,11 @@ class _NativeBackend:
             candidate = windows[0]
         if candidate is not None:
             try:
-                q.AXUIElementPerformAction(candidate, q.kAXRaiseAction)
+                ax.AXUIElementPerformAction(candidate, ax.kAXRaiseAction)
             except Exception:
                 pass
             try:
-                q.AXUIElementSetAttributeValue(candidate, q.kAXMainAttribute, True)
+                ax.AXUIElementSetAttributeValue(candidate, ax.kAXMainAttribute, True)
             except Exception:
                 pass
 
