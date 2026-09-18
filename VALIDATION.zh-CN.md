@@ -6,7 +6,9 @@
 
 ## 已完成
 
-当前 Windows portable 回归：**27 项通过，1 项跳过**；Python 语法检查通过。
+当前 Windows portable 回归：**27 项通过，5 项跳过**；其中 4 项为仅在 macOS 上执行的 native smoke tests，另 1 项为平台条件测试；Python 语法检查通过。
+
+macOS native smoke tests 直接调用进程身份、显示器枚举、Quartz modifier flags、当前输入状态与前台窗口探测，但不会在 CI 中发送真实桌面输入。
 
 自动测试覆盖：
 

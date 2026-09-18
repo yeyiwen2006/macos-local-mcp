@@ -6,7 +6,9 @@ Current version: 0.1.1 experimental.
 
 ## Completed automated coverage
 
-Current Windows portable regression: **27 passed, 1 skipped**; Python syntax checks passed.
+The macOS-native smoke tests directly call process identity, display enumeration, Quartz modifier flags, current input-state probes, and frontmost-window probes without sending real desktop input in CI.
+
+Current Windows portable regression: **27 passed, 5 skipped**; four skips are macOS-only native smoke tests and one is another platform-conditional test; Python syntax checks passed.
 
 - file create/read/binary pagination/replace/backup and stale-write checks;
 - symlink mutation rejection;
