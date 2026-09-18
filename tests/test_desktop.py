@@ -33,6 +33,8 @@ class FakeBackend:
             "bundle_id": "com.example.Editor",
         }
         self.events = []
+        self.held = []
+        self.accessibility = True
         self._windows = [
             {"hwnd": 10, "window_id": 10, "pid": 100, "title": "Editor",
              "left": 0, "top": 0, "right": 800, "bottom": 600, "foreground": True},
@@ -58,12 +60,17 @@ class FakeBackend:
     def frontmost_pid(self):
         return self.front_pid
 
+    def frontmost_window_id(self):
+        return int(self.focused["window_id"]) if self.front_pid else 0
+
     def process_identity(self, pid):
         if pid != self.identity["pid"]:
             raise DesktopError("missing")
         return dict(self.identity)
 
     def focused_window_signature(self, pid):
+        if not self.accessibility:
+            raise DesktopError("Accessibility permission is required")
         if pid != self.front_pid:
             return None
         return dict(self.focused)
@@ -91,11 +98,14 @@ class FakeBackend:
     def mouse_button(self, x, y, button, down):
         self.events.append(("button", x, y, button, down))
 
-    def scroll(self, x, y, vertical, horizontal):
-        self.events.append(("scroll", x, y, vertical, horizontal))
+    def held_inputs(self):
+        return list(self.held)
 
-    def key(self, keycode, down):
-        self.events.append(("key", keycode, down))
+    def scroll(self, vertical, horizontal):
+        self.events.append(("scroll", vertical, horizontal))
+
+    def key(self, keycode, down, modifiers=()):
+        self.events.append(("key", keycode, down, tuple(modifiers)))
 
     def unicode_text(self, text):
         self.events.append(("text", text))
@@ -132,6 +142,15 @@ def test_input_requires_explicit_target():
     desktop = Desktop(lambda: None, backend=backend)
     with pytest.raises(DesktopError, match="No desktop input target"):
         desktop.click(100, 100)
+
+
+def test_screenshot_works_without_accessibility_when_screen_capture_backend_works():
+    desktop, backend = locked_desktop()
+    backend.accessibility = False
+    data, meta = desktop.screenshot()
+    assert data.startswith(b"\x89PNG")
+    assert meta["foreground_hwnd"] == 10
+    assert meta["input_allowed"] is False
 
 
 def test_screenshot_never_retargets_after_user_switch():
@@ -183,6 +202,51 @@ def test_process_restart_invalidates_target():
         desktop.keypress(["enter"])
 
 
+def test_keypress_sets_explicit_quartz_modifier_flags():
+    desktop, backend = locked_desktop()
+    desktop.keypress(["command", "shift", "a"])
+    ordinary_down = next(
+        event for event in backend.events
+        if event[0] == "key" and event[1] == 0 and event[2] is True
+    )
+    assert set(ordinary_down[3]) == {"command", "shift"}
+
+
+def test_held_user_input_must_be_stably_released(monkeypatch):
+    desktop, backend = locked_desktop()
+    now = {"value": 0.0}
+    backend.held = ["Left Command"]
+
+    def monotonic():
+        return now["value"]
+
+    def sleep(seconds):
+        now["value"] += seconds
+        if now["value"] >= 0.2:
+            backend.held = []
+
+    monkeypatch.setattr("macos_local_mcp.desktop.time.monotonic", monotonic)
+    monkeypatch.setattr("macos_local_mcp.desktop.time.sleep", sleep)
+    desktop.click(10, 10)
+    assert now["value"] >= 0.3
+    assert any(event[0] == "button" and event[4] is True for event in backend.events)
+
+
+def test_persistent_held_input_blocks_without_sending_input(monkeypatch):
+    desktop, backend = locked_desktop()
+    now = {"value": 0.0}
+    backend.held = ["Left Control", "Left mouse button"]
+
+    monkeypatch.setattr("macos_local_mcp.desktop.time.monotonic", lambda: now["value"])
+    monkeypatch.setattr(
+        "macos_local_mcp.desktop.time.sleep",
+        lambda seconds: now.__setitem__("value", now["value"] + seconds),
+    )
+    with pytest.raises(DesktopError, match="Left Control, Left mouse button"):
+        desktop.click(10, 10)
+    assert not any(event[0] == "button" for event in backend.events)
+
+
 def test_explicit_focus_is_only_way_to_change_target():
     desktop, backend = locked_desktop()
     desktop.focus_window(20)
@@ -210,19 +274,19 @@ def test_type_text_rechecks_target_between_characters():
 
 
 def test_drag_releases_mouse_even_when_pause_interrupts():
-    calls = {"n": 0}
     backend = FakeBackend()
 
     def check():
-        calls["n"] += 1
-        if calls["n"] > 3:
+        down = any(event[:5] == ("button", 10, 10, "left", True) for event in backend.events)
+        moved_after_down = down and sum(event[0] == "move" for event in backend.events) >= 2
+        if moved_after_down:
             raise PermissionError("Paused")
 
     desktop = Desktop(check, backend=backend)
     desktop.focus_window(10)
     with pytest.raises(PermissionError):
         desktop.drag(10, 10, 100, 100, 0.05)
-    assert any(event == ("button", 100, 100, "left", False) for event in backend.events)
+    assert any(event[0] == "button" and event[4] is False for event in backend.events)
 
 
 def test_screenshot_coordinate_mapping_uses_quartz_points():

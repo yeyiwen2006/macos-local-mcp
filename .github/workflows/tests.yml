@@ -32,6 +32,10 @@ jobs:
         run: python -m pip install -e ".[test]"
       - name: Native imports
         run: python -c "import AppKit, Quartz, ApplicationServices; from macos_local_mcp.desktop import _NativeBackend; _NativeBackend(); print('PyObjC native imports OK')"
+      - name: Native API surface
+        run: python -c "import Quartz, ApplicationServices as AX; required_q=['CGWindowListCopyWindowInfo','CGWindowListCreateImage','CGEventCreateKeyboardEvent','CGEventSetFlags','CGEventSourceKeyState','CGEventSourceButtonState','CGEventKeyboardSetUnicodeString']; required_ax=['AXUIElementCopyAttributeValue','AXUIElementCreateApplication','AXUIElementPerformAction']; assert all(hasattr(Quartz,n) for n in required_q); assert all(hasattr(AX,n) for n in required_ax); print('Native API surface OK')"
+      - name: Permission status smoke
+        run: python -c "from macos_local_mcp.permissions import permission_status; print(permission_status())"
       - name: Shell syntax
         run: bash -n Setup.command Configure.command Permissions.command Start.command Stop.command Pause.command Resume.command Check.command Control.command
       - name: Test

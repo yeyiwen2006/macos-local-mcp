@@ -2,7 +2,7 @@
 
 **English** · [简体中文](VALIDATION.zh-CN.md)
 
-Current version: 0.1.0 experimental.
+Current version: 0.1.1 experimental.
 
 ## Completed automated coverage
 
@@ -21,9 +21,14 @@ Current version: 0.1.0 experimental.
 - invalidating locks when process creation identity changes;
 - target revalidation between typed characters;
 - mouse-up cleanup when a drag is interrupted;
-- Quartz-point to screenshot-scale coordinate mapping.
+- Quartz-point to screenshot-scale coordinate mapping;
+- screenshot operation without an Accessibility dependency;
+- explicit Quartz modifier flags for key chords;
+- stable-release waiting for user-held modifiers and mouse buttons;
+- AXWindowNumber-first window mapping;
+- Tunnel identity verification using PID, creation time, and executable path.
 
-GitHub Actions are designed to run portable tests plus macOS native dependency/import checks.
+GitHub Actions have successfully run the portable suite and macOS native checks, including PyObjC / Quartz / AppKit imports, shell syntax, and the full automated test suite. Version 0.1.1 also checks the newly used Quartz/Accessibility API surface on the macOS runner.
 
 ## Pending physical-Mac validation
 

@@ -2,7 +2,7 @@
 
 [English](VALIDATION.en.md) · **简体中文**
 
-当前版本：0.1.0 experimental。
+当前版本：0.1.1 experimental。
 
 ## 已完成
 
@@ -23,9 +23,14 @@
 - 进程创建时间变化后旧锁失效；
 - 文本输入逐字符重新校验；
 - drag 中断的 mouse-up cleanup；
-- Quartz point / screenshot scale 坐标映射。
+- Quartz point / screenshot scale 坐标映射；
+- 截图与 Accessibility 权限解耦；
+- Quartz 组合键 modifier flags；
+- 用户按住修饰键/鼠标时的稳定释放等待；
+- AXWindowNumber 优先窗口映射；
+- Tunnel PID + 创建时间 + executable 身份核对。
 
-GitHub Actions 计划同时运行 Windows portable tests 与 macOS native dependency/import tests。
+GitHub Actions 已运行 Windows portable tests 与 macOS native tests；macOS runner 已成功完成 PyObjC / Quartz / AppKit 导入、Shell 语法和完整自动测试。0.1.1 还会在 macOS runner 上检查新增的 Quartz/Accessibility API surface。
 
 ## 未完成
 

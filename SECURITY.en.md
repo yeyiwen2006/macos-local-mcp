@@ -43,3 +43,8 @@ Use GitHub private vulnerability reporting when enabled. Do not paste credential
 ## Current experimental boundary
 
 The project has simulated safety tests and macOS CI, but real physical-Mac GUI/TCC validation is still pending. Validate it with a dedicated test account and non-sensitive data before relying on it.
+
+
+## Input state and emergency pause
+
+Before desktop input begins, the service checks common modifier keys and mouse buttons to reduce overlap between human input and automation. No global hotkey is registered by default so the project does not add an Input Monitoring permission surface solely for that feature; use the local Pause.command for emergency pause.

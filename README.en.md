@@ -128,7 +128,16 @@ Automated coverage currently includes:
 - rechecking the target between typed characters;
 - mouse-up cleanup when a drag is interrupted.
 
-GitHub Actions run portable tests and a macOS runner, with a native import check for PyObjC / Quartz / AppKit.
+GitHub Actions run portable tests and a macOS runner, with checks for PyObjC / Quartz / AppKit and the native APIs used by this project.
+
+Version 0.1.1 also hardens several real-Mac edge cases:
+
+- screenshots no longer require Accessibility merely to determine the foreground window; with Screen Recording alone, capture can still succeed while input_allowed safely reports false;
+- key chords explicitly set Quartz Command / Shift / Control / Option flags, improving reliability for real shortcuts such as Command+C and Command+S;
+- before each desktop action starts, the service checks for user-held modifier keys or mouse buttons, waits up to one second, and requires 100 ms of stable release;
+- Quartz windows are matched to Accessibility windows using AXWindowNumber when available, with titles used only as a fallback;
+- Tunnel stop/status logic verifies PID, process creation time, and executable path, then terminates the verified process tree through psutil to reduce PID-reuse risk;
+- the absence of a global pause hotkey is deliberate: it avoids adding an Input Monitoring permission surface. Use the local Pause.command for emergency pause; service_pause also remains available to the authenticated MCP caller.
 
 **Still pending physical-Mac validation:** real TCC authorization, screenshots, TextEdit/Safari/Finder/VS Code window switching, Chinese/emoji input, modal dialogs, multi-display behavior, and lock-screen behavior.
 

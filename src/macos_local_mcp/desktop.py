@@ -221,6 +221,8 @@ class _NativeBackend:
         options = q.kCGWindowListOptionOnScreenOnly | q.kCGWindowListExcludeDesktopElements
         raw = q.CGWindowListCopyWindowInfo(options, q.kCGNullWindowID) or []
         result = []
+        front_pid = self.frontmost_pid()
+        front_window_assigned = False
         for item in raw:
             try:
                 layer = int(item.get(q.kCGWindowLayer, 0))
@@ -231,6 +233,9 @@ class _NativeBackend:
                     continue
                 window_id = int(item[q.kCGWindowNumber])
                 pid = int(item[q.kCGWindowOwnerPID])
+                is_foreground = pid == front_pid and not front_window_assigned
+                if is_foreground:
+                    front_window_assigned = True
                 result.append({
                     "hwnd": window_id,
                     "window_id": window_id,
@@ -241,7 +246,7 @@ class _NativeBackend:
                     "top": int(round(float(bounds.get("Y", 0)))),
                     "right": int(round(float(bounds.get("X", 0)))) + width,
                     "bottom": int(round(float(bounds.get("Y", 0)))) + height,
-                    "foreground": pid == self.frontmost_pid(),
+                    "foreground": is_foreground,
                 })
             except (KeyError, TypeError, ValueError):
                 continue
@@ -256,6 +261,16 @@ class _NativeBackend:
     def frontmost_pid(self) -> int:
         app = self.AppKit.NSWorkspace.sharedWorkspace().frontmostApplication()
         return int(app.processIdentifier()) if app else 0
+
+    def frontmost_window_id(self) -> int:
+        """Return the topmost normal window for the frontmost app without Accessibility."""
+        pid = self.frontmost_pid()
+        if not pid:
+            return 0
+        for window in self.windows():
+            if window["pid"] == pid and window.get("foreground"):
+                return int(window["window_id"])
+        return 0
 
     def process_identity(self, pid: int) -> dict:
         import psutil
@@ -287,6 +302,16 @@ class _NativeBackend:
             return None
         return result
 
+    def _ax_window_id(self, element) -> int:
+        ax = self.AX
+        number = self._ax_value(
+            element, getattr(ax, "kAXWindowNumberAttribute", "AXWindowNumber")
+        )
+        try:
+            return int(number or 0)
+        except (TypeError, ValueError):
+            return 0
+
     def focused_window_signature(self, pid: int) -> dict | None:
         self._require_accessibility()
         ax = self.AX
@@ -297,17 +322,17 @@ class _NativeBackend:
         title = self._ax_value(focused, ax.kAXTitleAttribute)
         modal = self._ax_value(focused, getattr(ax, "kAXModalAttribute", "AXModal"))
         title_text = str(title or "")
+        window_id = self._ax_window_id(focused)
         candidates = [w for w in self.windows() if w["pid"] == pid]
         chosen = None
-        if title_text:
-            for item in candidates:
-                if item["title"] == title_text:
-                    chosen = item
-                    break
+        if window_id:
+            chosen = next((w for w in candidates if w["window_id"] == window_id), None)
+        if chosen is None and title_text:
+            chosen = next((w for w in candidates if w["title"] == title_text), None)
         if chosen is None and candidates:
             chosen = candidates[0]
         return {
-            "window_id": chosen["window_id"] if chosen else 0,
+            "window_id": window_id or (chosen["window_id"] if chosen else 0),
             "title": title_text or (chosen["title"] if chosen else ""),
             "modal": bool(modal),
         }
@@ -328,12 +353,21 @@ class _NativeBackend:
         target_title = record.get("title") or ""
         candidate = None
         for ax_window in windows:
-            title = self._ax_value(ax_window, ax.kAXTitleAttribute)
-            if target_title and str(title or "") == target_title:
+            if self._ax_window_id(ax_window) == window_id:
                 candidate = ax_window
                 break
-        if candidate is None and windows:
+        if candidate is None and target_title:
+            for ax_window in windows:
+                title = self._ax_value(ax_window, ax.kAXTitleAttribute)
+                if str(title or "") == target_title:
+                    candidate = ax_window
+                    break
+        if candidate is None and len(windows) == 1:
             candidate = windows[0]
+        if candidate is None:
+            raise DesktopError(
+                "Could not map the selected Quartz window to a unique Accessibility window."
+            )
         if candidate is not None:
             try:
                 ax.AXUIElementPerformAction(candidate, ax.kAXRaiseAction)
@@ -390,17 +424,49 @@ class _NativeBackend:
         event = q.CGEventCreateMouseEvent(None, down_type if down else up_type, (x, y), mouse_button)
         self._post(event)
 
-    def scroll(self, x: int, y: int, vertical: int, horizontal: int) -> None:
-        self.mouse_move(x, y)
+    def scroll(self, vertical: int, horizontal: int) -> None:
         q = self.Quartz
         event = q.CGEventCreateScrollWheelEvent(
             None, q.kCGScrollEventUnitLine, 2, int(vertical), int(horizontal)
         )
         self._post(event)
 
-    def key(self, keycode: int, down: bool) -> None:
+    def held_inputs(self) -> list[str]:
+        q = self.Quartz
+        source = q.kCGEventSourceStateCombinedSessionState
+        keys = [
+            (56, "Left Shift"), (60, "Right Shift"),
+            (59, "Left Control"), (62, "Right Control"),
+            (58, "Left Option"), (61, "Right Option"),
+            (55, "Left Command"), (54, "Right Command"),
+        ]
+        buttons = [(0, "Left mouse button"), (1, "Right mouse button"), (2, "Middle mouse button")]
+        try:
+            held = [
+                label for keycode, label in keys
+                if q.CGEventSourceKeyState(source, keycode)
+            ]
+            held.extend(
+                label for button, label in buttons
+                if q.CGEventSourceButtonState(source, button)
+            )
+            return held
+        except Exception as exc:
+            raise DesktopError("Could not verify the current keyboard/mouse input state.") from exc
+
+    def key(self, keycode: int, down: bool, modifiers: tuple[str, ...] = ()) -> None:
         q = self.Quartz
         event = q.CGEventCreateKeyboardEvent(None, keycode, bool(down))
+        flag_map = {
+            "shift": q.kCGEventFlagMaskShift,
+            "ctrl": q.kCGEventFlagMaskControl,
+            "alt": q.kCGEventFlagMaskAlternate,
+            "command": q.kCGEventFlagMaskCommand,
+        }
+        flags = 0
+        for modifier in modifiers:
+            flags |= int(flag_map[modifier])
+        q.CGEventSetFlags(event, flags)
         self._post(event)
 
     def unicode_text(self, text: str) -> None:
@@ -445,9 +511,7 @@ class Desktop:
             return self._backend.windows()
 
     def foreground_window(self) -> int:
-        pid = self._backend.frontmost_pid()
-        sig = self._backend.focused_window_signature(pid) if pid else None
-        return int(sig["window_id"]) if sig and sig.get("window_id") else 0
+        return int(self._backend.frontmost_window_id())
 
     def _target_summary(self) -> dict | None:
         if not self.input_target:
@@ -576,19 +640,53 @@ class Desktop:
                 "foreground_hwnd": foreground,
                 "foreground_pid": foreground_pid,
                 "input_target": self._target_summary(),
-                "input_allowed": self._target_matches(verify_process=True),
+                "input_allowed": self._snapshot_input_allowed(),
                 "coordinate_space": "quartz_global_points",
                 "coordinate_mapping": "x = left + image_x / scale_x; y = top + image_y / scale_y",
             }
+
+    def _snapshot_input_allowed(self) -> bool:
+        try:
+            return self._target_matches(verify_process=True)
+        except DesktopError:
+            return False
 
     def _before_input(self) -> None:
         self._checkpoint()
         self._assert_input_target(verify_process=True)
 
+    def _wait_for_released_inputs(self) -> None:
+        deadline = time.monotonic() + 1.0
+        idle_since = None
+        last_held: list[str] = []
+        while True:
+            self._before_input()
+            held = self._backend.held_inputs()
+            now = time.monotonic()
+            if held:
+                last_held = held
+                idle_since = None
+            elif idle_since is None:
+                idle_since = now
+            elif now - idle_since >= 0.1:
+                return
+            if now >= deadline:
+                names = ", ".join(held or last_held) or "an unsettled modifier/button state"
+                raise DesktopError(
+                    f"Input did not become idle within 1 second. Last detected held input: {names}. "
+                    "Release it locally, take a fresh screenshot, then retry. No input was sent."
+                )
+            time.sleep(min(0.02, deadline - now))
+
+    def _prepare_input(self) -> None:
+        self._before_input()
+        self._wait_for_released_inputs()
+        self._before_input()
+
     def move(self, x: int, y: int) -> dict:
         with self._lock:
             x, y = _point(x, y, self._backend.monitors())
-            self._before_input()
+            self._prepare_input()
             self._backend.mouse_move(x, y)
             return {"x": x, "y": y}
 
@@ -598,7 +696,7 @@ class Desktop:
         _integer(clicks, "clicks", 1, 3)
         with self._lock:
             x, y = _point(x, y, self._backend.monitors())
-            self._before_input()
+            self._prepare_input()
             self._backend.mouse_move(x, y)
             for index in range(clicks):
                 self._before_input()
@@ -617,9 +715,11 @@ class Desktop:
             monitors = self._backend.monitors()
             _point(x1, y1, monitors)
             _point(x2, y2, monitors)
-            self._before_input()
+            self._prepare_input()
             self._backend.mouse_move(x1, y1)
+            self._before_input()
             self._backend.mouse_button(x1, y1, "left", True)
+            current_x, current_y = x1, y1
             try:
                 steps = max(2, math.ceil(duration * 40))
                 start = time.monotonic()
@@ -632,8 +732,9 @@ class Desktop:
                     if remaining > 0:
                         time.sleep(min(remaining, 0.05))
                     self._backend.mouse_move(x, y)
+                    current_x, current_y = x, y
             finally:
-                self._backend.mouse_button(x2, y2, "left", False)
+                self._backend.mouse_button(current_x, current_y, "left", False)
             return {"from": [x1, y1], "to": [x2, y2], "duration": duration}
 
     def scroll(self, x: int, y: int, vertical: int = 0, horizontal: int = 0) -> dict:
@@ -643,24 +744,32 @@ class Desktop:
             raise ValueError("At least one scroll direction must be nonzero.")
         with self._lock:
             x, y = _point(x, y, self._backend.monitors())
+            self._prepare_input()
+            self._backend.mouse_move(x, y)
             self._before_input()
-            self._backend.scroll(x, y, vertical, horizontal)
+            self._backend.scroll(vertical, horizontal)
             return {"x": x, "y": y, "vertical": vertical, "horizontal": horizontal,
                     "units": "line notches; positive means up/right"}
 
     def keypress(self, keys: list[str]) -> dict:
         chord = _chord(keys)
         with self._lock:
-            pressed = []
+            self._prepare_input()
+            pressed: list[tuple[str, int, bool]] = []
+            active_modifiers: list[str] = []
             try:
-                for name, keycode, _modifier in chord:
+                for name, keycode, modifier in chord:
                     self._before_input()
-                    pressed.append((name, keycode))
-                    self._backend.key(keycode, True)
+                    if modifier:
+                        active_modifiers.append(name)
+                    pressed.append((name, keycode, modifier))
+                    self._backend.key(keycode, True, tuple(active_modifiers))
             finally:
-                for _name, keycode in reversed(pressed):
+                for name, keycode, modifier in reversed(pressed):
                     try:
-                        self._backend.key(keycode, False)
+                        if modifier and name in active_modifiers:
+                            active_modifiers.remove(name)
+                        self._backend.key(keycode, False, tuple(active_modifiers))
                     except Exception:
                         pass
             return {"keys": [name for name, _keycode, _modifier in chord]}
@@ -671,6 +780,7 @@ class Desktop:
         if any(ord(ch) < 32 and ch not in "\n\r\t" for ch in text) or "\x7f" in text:
             raise ValueError("text contains unsupported control characters.")
         with self._lock:
+            self._prepare_input()
             deadline = time.monotonic() + 20
             for index, char in enumerate(text):
                 if time.monotonic() > deadline:

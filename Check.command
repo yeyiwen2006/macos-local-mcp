@@ -11,15 +11,38 @@ fi
 
 echo
 echo "== Tunnel =="
-if [ -f ".local/running.json" ]; then
-  PID="$(python3 -c 'import json; print(json.load(open(".local/running.json"))["pid"])')"
-  HEALTH="$(python3 -c 'import json; print(json.load(open(".local/running.json"))["health_file"])')"
-  if kill -0 "$PID" 2>/dev/null; then
-    echo "Tunnel PID: $PID"
-    if [ -f "$HEALTH" ]; then
-      URL="$(cat "$HEALTH")"
-      echo "Health URL: $URL"
-      python3 - "$URL" <<'PY' || true
+if [ -f ".local/running.json" ] && [ -x ".venv/bin/python" ]; then
+  STATUS="$(
+    .venv/bin/python - <<'PY'
+import json, os
+import psutil
+try:
+    record = json.load(open('.local/running.json', encoding='utf-8'))
+    process = psutil.Process(int(record['pid']))
+    same = (
+        abs(float(process.create_time()) - float(record['create_time'])) < 0.01
+        and os.path.realpath(process.exe()) == os.path.realpath(record['executable'])
+    )
+    if same:
+        print(f"verified:{record['pid']}:{record['health_file']}")
+    else:
+        print('identity-mismatch')
+except psutil.NoSuchProcess:
+    print('not-running')
+except Exception:
+    print('invalid-record')
+PY
+  )"
+  case "$STATUS" in
+    verified:*)
+      REST="${STATUS#verified:}"
+      PID="${REST%%:*}"
+      HEALTH="${REST#*:}"
+      echo "Verified Tunnel PID: $PID"
+      if [ -f "$HEALTH" ]; then
+        URL="$(cat "$HEALTH")"
+        echo "Health URL: $URL"
+        python3 - "$URL" <<'PY' || true
 import sys, urllib.request
 try:
     with urllib.request.urlopen(sys.argv[1], timeout=2) as r:
@@ -27,10 +50,20 @@ try:
 except Exception as exc:
     print('Health check failed:', exc)
 PY
-    fi
-  else
-    echo "Recorded Tunnel is not running."
-  fi
+      else
+        echo "Health URL file is not available yet."
+      fi
+      ;;
+    identity-mismatch)
+      echo "Recorded PID exists but process identity does not match; refusing to trust it."
+      ;;
+    not-running)
+      echo "Recorded Tunnel is not running."
+      ;;
+    *)
+      echo "Running record is invalid or cannot be verified."
+      ;;
+  esac
 else
   echo "No running Tunnel recorded."
 fi

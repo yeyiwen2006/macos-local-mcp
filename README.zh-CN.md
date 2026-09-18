@@ -128,7 +128,16 @@ macOS 的 ACL、File Provider、iCloud、sandbox container 和第三方文件系
 - 输入过程中每个字符重新检查目标；
 - drag 中断后 mouse-up cleanup。
 
-GitHub Actions 会同时运行 portable tests 和 macOS runner 测试，并在 macOS runner 上验证 PyObjC / Quartz / AppKit 可以导入。
+GitHub Actions 会同时运行 portable tests 和 macOS runner 测试，并在 macOS runner 上验证 PyObjC / Quartz / AppKit 以及本项目使用的原生 API 是否存在。
+
+0.1.1 还补强了几处真实 Mac 风险点：
+
+- 截图路径不再为了判断前台窗口而强制依赖 Accessibility；只有 Screen Recording 时也可以完成截图，input_allowed 会安全地显示为 false；
+- 组合键会在 Quartz 键盘事件上显式设置 Command / Shift / Control / Option flags，提高 Command+C、Command+S 等真实组合键的可靠性；
+- 每次开始桌面输入前会检查用户是否正按住修饰键或鼠标按钮，最多等待 1 秒并要求连续 100 ms 稳定释放；
+- Quartz 窗口与 Accessibility 窗口优先通过 AXWindowNumber 对应，标题只作为回退，降低同标题多窗口歧义；
+- Tunnel 的停止与状态检查同时核对 PID、进程创建时间和可执行文件路径，并通过 psutil 终止已验证的进程树，降低 PID 复用误杀风险；
+- 不注册全局热键是有意的设计选择，避免为了热键额外引入 Input Monitoring 权限面；紧急暂停使用本机 Pause.command，远程连接也可以调用 service_pause。
 
 **尚未完成的实机验收：** 在真实 Mac 上授权 TCC 后，对 TextEdit / Safari / Finder / VS Code 执行真实截图、窗口切换、中文/emoji 输入、modal dialog、多显示器和锁屏场景。
 

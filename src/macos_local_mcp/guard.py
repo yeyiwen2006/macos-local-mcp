@@ -53,7 +53,7 @@ class Guard:
         self.stopped = threading.Event()
         self.lock = threading.RLock()
         self.hotkey_ready = False
-        self.hotkey_error = "Experimental build: use Pause.command or service_pause for emergency stop"
+        self.hotkey_error = "No global hotkey is registered by design; use Pause.command or service_pause"
 
     def check(self) -> None:
         if self.stopped.is_set() or self.paused_file.exists():
@@ -116,9 +116,10 @@ class Guard:
                 self.audit({**event, "result": "completed"})
 
     def start_hotkey(self) -> None:
-        # The experimental macOS build intentionally does not install a background
-        # global hotkey. Local Pause.command and remote service_pause remain available.
+        # Deliberately avoid a global event tap: registering one can introduce an
+        # additional Input Monitoring privacy surface. Pause.command remains local,
+        # and service_pause remains available to the authenticated MCP caller.
         self.hotkey_ready = False
 
     def close(self) -> None:
-        pass
+        return None

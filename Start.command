@@ -4,15 +4,36 @@ cd "$(dirname "$0")"
 mkdir -p .local
 chmod 700 .local
 
+PYTHON="$PWD/.venv/bin/python"
+if [ ! -x "$PYTHON" ]; then
+  echo "Run ./Setup.command first." >&2
+  exit 1
+fi
 if [ ! -f ".local/connection.json" ]; then
   echo "Run ./Configure.command first." >&2
   exit 1
 fi
+
 if [ -f ".local/running.json" ]; then
-  PID="$(python3 -c 'import json; print(json.load(open(".local/running.json"))["pid"])' 2>/dev/null || true)"
-  if [ -n "${PID:-}" ] && kill -0 "$PID" 2>/dev/null; then
-    echo "Already running with PID $PID." >&2
+  if "$PYTHON" - <<'PY'
+import json, os
+import psutil
+try:
+    record = json.load(open('.local/running.json', encoding='utf-8'))
+    process = psutil.Process(int(record['pid']))
+    same = (
+        abs(float(process.create_time()) - float(record['create_time'])) < 0.01
+        and os.path.realpath(process.exe()) == os.path.realpath(record['executable'])
+    )
+except (OSError, ValueError, KeyError, psutil.Error):
+    same = False
+raise SystemExit(0 if same else 1)
+PY
+  then
+    echo "Already running with a verified Tunnel process." >&2
     exit 1
+  else
+    rm -f .local/running.json
   fi
 fi
 
@@ -24,7 +45,6 @@ fi
 
 TUNNEL_ID="$(python3 -c 'import json; print(json.load(open(".local/connection.json"))["tunnel_id"])')"
 RUNTIME_KEY="$(security find-generic-password -s "macos-local-mcp-runtime" -a "$USER" -w)"
-PYTHON="$PWD/.venv/bin/python"
 HEALTH_FILE="$PWD/.local/health-$(date +%s)-$$.url"
 
 export CONTROL_PLANE_API_KEY="$RUNTIME_KEY"
@@ -42,9 +62,17 @@ nohup "$TUNNEL" run \
 PID=$!
 unset CONTROL_PLANE_API_KEY RUNTIME_KEY
 
-python3 - "$PID" "$TUNNEL" "$HEALTH_FILE" <<'PY'
+"$PYTHON" - "$PID" "$TUNNEL" "$HEALTH_FILE" <<'PY'
 import json, os, sys
-record = {'pid': int(sys.argv[1]), 'executable': os.path.realpath(sys.argv[2]), 'health_file': sys.argv[3]}
+import psutil
+pid = int(sys.argv[1])
+process = psutil.Process(pid)
+record = {
+    'pid': pid,
+    'create_time': process.create_time(),
+    'executable': os.path.realpath(process.exe()),
+    'health_file': sys.argv[3],
+}
 with open('.local/running.json', 'w', encoding='utf-8') as f:
     json.dump(record, f)
 os.chmod('.local/running.json', 0o600)
@@ -52,6 +80,7 @@ PY
 
 for _ in $(seq 1 40); do
   if ! kill -0 "$PID" 2>/dev/null; then
+    rm -f .local/running.json
     echo "Tunnel client exited. Check .local/tunnel.stderr.log" >&2
     exit 1
   fi

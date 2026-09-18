@@ -43,3 +43,8 @@ runtime API key 由 Configure.command 写入 macOS Keychain，而不是明文配
 ## 当前 experimental 边界
 
 当前版本已有模拟安全测试和 macOS CI，但真实 Mac GUI/TCC 流程还没有完成实机验收。正式使用前应在隔离测试账号和无敏感数据环境下完成验证。
+
+
+## 输入状态与紧急暂停
+
+开始发送桌面输入前，服务会检查常见修饰键和鼠标按钮是否正由用户按住，避免人工操作与自动化操作叠加。全局热键没有默认注册，这是为了不额外引入 Input Monitoring 权限；本机紧急暂停使用 Pause.command。
