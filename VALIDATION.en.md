@@ -6,6 +6,8 @@ Current version: 0.1.1 experimental.
 
 ## Completed automated coverage
 
+Current Windows portable regression: **27 passed, 1 skipped**; Python syntax checks passed.
+
 - file create/read/binary pagination/replace/backup and stale-write checks;
 - symlink mutation rejection;
 - overwrite rejection for files with extended attributes;
