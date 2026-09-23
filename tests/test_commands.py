@@ -40,7 +40,9 @@ def start_python(commands, tmp_path, code, **kwargs):
 def finished(commands, started, timeout=8):
     job = commands.jobs[started["job_id"]]
     assert job.done.wait(timeout), "Command watchdog did not finish"
-    return job.snapshot()
+    snapshot = job.snapshot()
+    assert snapshot["error_type"] is None, snapshot
+    return snapshot
 
 
 def wait_output(commands, started, timeout=5):
