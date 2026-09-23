@@ -15,6 +15,7 @@ import selectors
 import signal
 import stat
 import subprocess
+import sys
 import threading
 import time
 from uuid import uuid4
@@ -152,6 +153,23 @@ class PosixProcess:
             os.killpg(self.pid, sig)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # XNU killpg1 skips zombies, then returns EPERM if no live member
+            # accepted the signal. Only dismiss that empty-group case after
+            # verification; a real permission denial must remain a failure.
+            if sys.platform != "darwin" or not self.exited() or self._has_live_group_members():
+                raise
+
+    def _has_live_group_members(self) -> bool:
+        for pid in psutil.pids():
+            try:
+                if os.getpgid(pid) == self.pid and psutil.Process(pid).status() != psutil.STATUS_ZOMBIE:
+                    return True
+            except (ProcessLookupError, psutil.NoSuchProcess):
+                continue
+        # AccessDenied/other failures intentionally propagate: missing visibility
+        # is not evidence that a command group has been cleaned up.
+        return False
 
     def terminate(self, grace: float = 0.15) -> int:
         if grace:
