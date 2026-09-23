@@ -2,9 +2,13 @@
 
 [简体中文](README.zh-CN.md) · [English](README.en.md)
 
-**中文：** 让 ChatGPT 在 Chat 模式中也可以通过 MCP 读取本机文件、写入文件、查看屏幕并操作 macOS 桌面。当前 0.1.1 版本为 **experimental**：文件与目标锁逻辑已有自动测试，但真实 Mac 上的 Accessibility、Screen Recording、窗口激活和真实输入仍需实机验收。
+**中文：** 让 ChatGPT 在 Chat 模式中也可以通过 MCP 读取本机文件、写入文件、查看屏幕并操作 macOS 桌面。当前版本为0.2.0。
 
-**English:** Give ChatGPT in Chat mode MCP-based access to local files, file writes, screen viewing, and macOS desktop control. Version 0.1.1 is **experimental**: file handling and target-lock semantics have automated coverage, but Accessibility, Screen Recording, window activation, and real input still require validation on a physical Mac.
+**English:** Give ChatGPT in Chat mode MCP-based access to local files, file writes, screen viewing, and macOS desktop control. Current version: 0.2.0.
+
+**命令行 / Commands:** 新增 `command_start`、`command_poll`、`command_cancel`，可直接运行 Git、构建、测试等本机命令，无需终端焦点。默认关闭，运行 `Enable-Commands.command` 在本机授权；使用当前用户权限，不自动提权，也不是沙箱。
+
+Opt-in local commands now support start, output/status polling, and cancellation without terminal focus. Enable locally with `Enable-Commands.command`. Commands use current-user permissions without automatic elevation or an OS sandbox.
 
 - 中文完整说明：[README.zh-CN.md](README.zh-CN.md)
 - Full English documentation: [README.en.md](README.en.md)

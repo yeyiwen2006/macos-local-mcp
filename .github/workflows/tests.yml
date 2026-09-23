@@ -7,6 +7,7 @@ on:
 jobs:
   portable:
     runs-on: windows-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -22,6 +23,7 @@ jobs:
 
   macos:
     runs-on: macos-15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -37,6 +39,9 @@ jobs:
       - name: Permission status smoke
         run: python -c "from macos_local_mcp.permissions import permission_status; print(permission_status())"
       - name: Shell syntax
-        run: bash -n Setup.command Configure.command Permissions.command Start.command Stop.command Pause.command Resume.command Check.command Control.command
+        run: |
+          for script in ./*.command; do
+            bash -n "$script"
+          done
       - name: Test
         run: python -m pytest -q

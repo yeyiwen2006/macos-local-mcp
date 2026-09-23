@@ -4,7 +4,7 @@
 
 Give ChatGPT in Chat mode MCP-based access to local files, file writes, screen viewing, and macOS desktop control. The MCP surface is intentionally close to the Windows version, while the desktop backend uses Quartz, the macOS Accessibility API, and macOS privacy permissions.
 
-> **Current status: experimental.** File handling, pause/audit behavior, one-use screenshot IDs, and desktop target-lock semantics have automated coverage. Accessibility, Screen Recording, real window activation, multi-display behavior, and real keyboard/mouse input have not yet been validated on a physical Mac, so this should not be treated as production-verified software.
+Current version: 0.2.0.
 
 ## Permissions and risks
 
@@ -36,10 +36,38 @@ The primary tools use the same names:
 | Focus a window and lock input | desktop_focus_window |
 | Mouse | desktop_click, desktop_move, desktop_drag, desktop_scroll |
 | Keyboard and Unicode text | desktop_keypress, desktop_type_text |
+| Local command start, output/status and cancellation | command_start, command_poll, command_cancel |
 | Permission status | desktop_permissions |
 | Status and pause | service_status, service_pause |
 
 Coordinates use **Quartz global points**, not raw Retina screenshot pixels. desktop_screenshot returns scale_x / scale_y for mapping output-image coordinates back to desktop coordinates.
+
+## Local command execution (0.2.0)
+
+Use `command_start` to launch a program, `command_poll` to read output/status, and `command_cancel` to stop a job. No Terminal focus, Accessibility, or Screen Recording permission is needed. Access to TCC-protected files still depends on the host's existing permissions.
+
+Commands are disabled by default. Run `./Enable-Commands.command` on the Mac and type `ENABLE`, or use the `Control.command` menu. `./Disable-Commands.command` revokes approval and stops running command groups. Enabling does not resume a paused service or restart cancelled jobs. Explicit local administration can use `.venv/bin/python -m macos_local_mcp.control enable-commands --accept-command-risk`.
+
+Example `command_start` arguments for an installed Git:
+
+```json
+{
+  "executable": "/usr/bin/git",
+  "arguments": ["--version"],
+  "cwd": "/tmp",
+  "timeout_seconds": 30
+}
+```
+
+Poll the returned `job_id` with `command_poll`; pass the same ID to `command_cancel` to cancel it. **Starting is not success**: only `state=completed` with `exit_code=0` is successful. Nonzero exits, timeout, pause, cancellation and revoked approval remain distinct outcomes.
+
+Executable and cwd must be absolute paths; arguments must be an array. No shell is implicitly inserted, so spaces, semicolons, `$()` and globs are literal. Explicitly authorize a shell such as `/bin/zsh` and its script arguments when pipelines or redirects are required. `environment` can supply build variables; known Tunnel/API credentials and service-private variables are stripped and cannot be overridden. Executable symlink invocation paths are preserved for Homebrew and virtual environments.
+
+At most 4 jobs run concurrently and 32 jobs are retained in memory. Timeout defaults to 600 seconds and accepts 1–86400. stdout/stderr are incrementally decoded and capped at 262144 Unicode characters each; pipes keep draining after truncation. Polling returns at most 65536 characters per stream. Offsets count characters: follow each stream's `next_offset` and inspect `truncated`. `wait_seconds` is 0–10 and never holds the global action lock. Encodings: UTF-8, GB18030, UTF-16LE and CP1252; invalid byte sequences use replacement characters.
+
+Jobs run in their own POSIX process groups, with stdin at EOF and no interactive terminal, sudo password input or automatic elevation. Normal root exit cleans up remaining children in the group; timeout, cancellation, pause, revoked approval and normal service shutdown also stop the group. Cancellation remains available while paused. **Cancellation is not rollback**; command file writes do not receive `write_file` backups. Deliberately detached processes, launchd-managed processes, and force-killing the MCP process are outside guaranteed cleanup. This is not a daemon manager or an OS sandbox.
+
+Command entry points/cwd reject the service source and private state directories, but arbitrary script internals cannot be isolated by path checks. Never bypass tool refusals, pause, macOS permissions or service protections. Output is memory-only; audit records exclude arguments, environment values, paths and output contents. Output can contain sensitive data and must be treated as untrusted.
 
 ## Desktop target lock
 
@@ -109,7 +137,7 @@ Stop.command         stop the Tunnel
 - deletion goes to Trash and never falls back to permanent deletion;
 - the service source tree and .local credentials/backups/audit state are hidden from MCP file tools.
 
-macOS has many ACL, File Provider, iCloud, sandbox-container, and third-party filesystem edge cases. The experimental build does not claim complete coverage of all special metadata semantics.
+macOS has many ACL, File Provider, iCloud, sandbox-container, and third-party filesystem edge cases. The current version does not claim complete coverage of all special metadata semantics.
 
 ## Validation status
 
