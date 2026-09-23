@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "macos-local-mcp"
-version = "0.1.1"
-description = "macOS file and desktop tools over MCP stdio"
+version = "0.2.0"
+description = "macOS file, desktop, and opt-in command tools over MCP stdio"
 requires-python = ">=3.13"
 license = "MIT"
 readme = "README.md"

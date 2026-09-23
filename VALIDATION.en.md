@@ -2,13 +2,19 @@
 
 **English** · [简体中文](VALIDATION.zh-CN.md)
 
-Current version: 0.1.1 experimental.
+Current version: 0.2.0.
 
-## Completed automated coverage
+## 0.2.0 command regression
+
+New coverage includes disabled-by-default/local approval, private environment filtering, MCP registration, argument limits, Unicode pagination/truncation, and real macOS runner processes for argv/cwd/stdin, dual-pipe draining, nonzero exit, incremental decoding, timeout, cancellation, pause, revocation, SIGTERM-resistant processes, ordinary child cleanup, concurrency/retention limits, executable symlinks and stdio session shutdown. Command tests do not request or grant desktop TCC permissions.
+
+Windows runs portable logic and skips real POSIX/macOS stdio tests; macOS CI executes actual subprocesses. Exact pass counts are recorded by Actions for each commit. The following 0.1.1 counts are historical, not 0.2.0 results.
+
+## Historical 0.1.1 coverage
 
 The macOS-native smoke tests directly call process identity, display enumeration, Quartz modifier flags, current input-state probes, and frontmost-window probes without sending real desktop input in CI.
 
-Current Windows portable regression: **27 passed, 5 skipped**; four skips are macOS-only native smoke tests and one is another platform-conditional test; Python syntax checks passed.
+0.1.1 Windows portable regression: **27 passed, 5 skipped**; four skips are macOS-only native smoke tests and one is another platform-conditional test; Python syntax checks passed.
 
 - file create/read/binary pagination/replace/backup and stale-write checks;
 - symlink mutation rejection;
@@ -47,7 +53,7 @@ GitHub Actions have successfully run the portable suite and macOS native checks,
 - behavior across macOS 13 / 14 / 15 / 26;
 - both Apple Silicon and Intel hardware.
 
-The repository remains experimental until these physical-Mac checks are completed.
+These physical desktop checks remain pending; command regression and CI results do not replace them.
 
 ## Security
 

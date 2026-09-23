@@ -13,6 +13,8 @@ while true; do
   echo "7  Stop"
   echo "8  Setup/repair"
   echo "9  Exit"
+  echo "10 Enable local commands (explicit approval)"
+  echo "11 Disable local commands"
   read -r -p "> " choice
   case "$choice" in
     1) ./Configure.command ;;
@@ -24,6 +26,8 @@ while true; do
     7) ./Stop.command ;;
     8) ./Setup.command ;;
     9) exit 0 ;;
+    10) ./Enable-Commands.command ;;
+    11) ./Disable-Commands.command ;;
     *) echo "Unknown choice." ;;
   esac
 done

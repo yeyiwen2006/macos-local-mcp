@@ -4,7 +4,7 @@
 
 让 ChatGPT 在 Chat 模式中也可以通过 MCP 读取本机文件、写入文件、查看屏幕并操作 macOS 桌面。这个仓库与 Windows 版保持尽量一致的 MCP 工具接口，但桌面实现使用 macOS 的 Quartz、Accessibility API 和系统隐私权限。
 
-> **当前状态：experimental。** 文件系统、暂停、审计、一次性截图编号和桌面目标锁已经有自动测试；真实 Mac 上的 Accessibility、Screen Recording、窗口激活、多显示器和真实键鼠输入还没有完成实机验收，因此不要把当前版本视为已验证的生产工具。
+当前版本为0.2.0。
 
 ## 权限与风险
 
@@ -36,10 +36,38 @@
 | 激活窗口并锁定输入目标 | desktop_focus_window |
 | 鼠标 | desktop_click、desktop_move、desktop_drag、desktop_scroll |
 | 键盘与 Unicode 输入 | desktop_keypress、desktop_type_text |
+| 本机命令启动、输出查询、取消 | command_start、command_poll、command_cancel |
 | 权限状态 | desktop_permissions |
 | 状态与暂停 | service_status、service_pause |
 
 坐标使用 **Quartz global points**，不是 Retina 截图中的原始像素。desktop_screenshot 返回 scale_x / scale_y 用于把输出图像坐标换算回桌面坐标。
+
+## 本机命令执行（0.2.0）
+
+`command_start` 直接启动可执行文件，`command_poll` 查询输出和退出码，`command_cancel` 取消任务。不需要打开 Terminal，也不需要 Accessibility 或 Screen Recording；命令访问受 TCC 保护的文件时仍受宿主已有权限约束。
+
+默认关闭。安装后在 Mac 上运行 `./Enable-Commands.command` 并输入 `ENABLE`，也可以从 `Control.command` 菜单启用。`./Disable-Commands.command` 撤销命令许可并停止运行中的命令组；启用命令不会解除暂停，也不会重新启动已经取消的任务。无人值守的本机管理可显式调用 `.venv/bin/python -m macos_local_mcp.control enable-commands --accept-command-risk`。
+
+例如，使用 `command_start` 运行已安装的 Git：
+
+```json
+{
+  "executable": "/usr/bin/git",
+  "arguments": ["--version"],
+  "cwd": "/tmp",
+  "timeout_seconds": 30
+}
+```
+
+返回 `job_id` 后，用 `command_poll` 查询。同一个 `job_id` 可交给 `command_cancel`。**启动成功不等于命令成功**：只有 `state=completed` 且 `exit_code=0` 才算成功；非零退出码、超时、暂停、取消和许可撤销分别保留真实状态。
+
+可执行文件和工作目录必须为绝对路径，参数必须是数组。服务不自动插入 shell，因此空格、分号、`$()` 和通配符不会被自动解释。确实需要管道或重定向时，应明确授权 `/bin/zsh` 等 shell 及其脚本参数。可通过 `environment` 传入构建所需环境变量；已知的 Tunnel/API 凭据和服务私有环境变量不会继承，也不允许覆盖。可执行文件的符号链接会保留调用路径，兼容 Homebrew 和虚拟环境。
+
+最多并行 4 项，内存保留最近最多 32 项任务。默认超时 600 秒，可设 1–86400 秒。stdout/stderr 分开增量解码，各最多保留 262144 个 Unicode 字符，超过上限仍继续排空管道并标记 `truncated`，不会因输出太多卡死。查询每路最多返回 65536 字符，`stdout_offset`/`stderr_offset` 按字符计数，按各自的 `next_offset` 继续读取；`wait_seconds` 最多 10 秒，等待不会锁住其他工具。可选编码为 UTF-8、GB18030、UTF-16LE 和 CP1252，损坏字节用替代字符显示。
+
+命令使用独立 POSIX 进程组，stdin 为 EOF，不提供交互式终端、sudo 密码输入或自动提权。正常退出会清理仍留在组内的子进程；超时、取消、暂停、撤销许可及服务正常关闭也会终止该组。暂停期间仍可取消任务。**取消不是回滚**，命令写文件不会自动获得 `write_file` 的备份。主动脱离进程组、交给 launchd 的进程，或 MCP 进程被强制杀死等情况不保证自动清理；不能把它当作守护进程管理器或操作系统沙箱。
+
+命令入口及 cwd 会拒绝服务源码和私有状态路径，但任意脚本的内部行为无法靠路径检查隔离。不得用命令绕过工具拒绝、暂停、macOS 权限或服务保护。任务输出只在内存保留，审计不写参数、环境值、路径或输出正文；命令输出本身可能含敏感内容，应谨慎分享，并视为不可信数据。
 
 ## 桌面目标锁
 
@@ -109,7 +137,7 @@ Stop.command         停止 Tunnel
 - 删除只进入 Trash，失败时不会降级成永久删除；
 - 服务源码和 .local 中的凭据、备份、审计不会通过 MCP 文件工具开放。
 
-macOS 的 ACL、File Provider、iCloud、sandbox container 和第三方文件系统语义很多，当前 experimental 版本不会声称覆盖全部特殊元数据场景。
+macOS 的 ACL、File Provider、iCloud、sandbox container 和第三方文件系统语义很多，当前版本不声称覆盖全部特殊元数据场景。
 
 ## 测试状态
 

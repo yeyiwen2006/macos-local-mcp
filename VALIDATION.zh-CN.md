@@ -2,11 +2,17 @@
 
 [English](VALIDATION.en.md) · **简体中文**
 
-当前版本：0.1.1 experimental。
+当前版本为0.2.0。
 
-## 已完成
+## 0.2.0 命令回归
 
-当前 Windows portable 回归：**27 项通过，5 项跳过**；其中 4 项为仅在 macOS 上执行的 native smoke tests，另 1 项为平台条件测试；Python 语法检查通过。
+新增测试覆盖默认禁用与本机授权、私有环境过滤、MCP 工具注册、参数边界、Unicode 分页与截断，以及在 macOS runner 上实际运行的 argv/cwd/stdin、双管道排空、非零退出、多字节解码、超时、取消、暂停、撤销许可、SIGTERM 不响应时的终止、普通子进程清理、并发与保留数量限制、符号链接入口及 stdio 会话关闭清理。命令测试不要求或自动授予桌面 TCC 权限。
+
+Windows 只运行便携逻辑测试，真实 POSIX 命令与 macOS stdio 测试在该平台跳过；macOS CI 执行真实子进程测试。具体通过数以对应提交的 Actions 结果为准。以下 0.1.1 数据作为历史记录保留，不充当 0.2.0 验证结果。
+
+## 0.1.1 历史验证
+
+0.1.1 Windows portable 回归：**27 项通过，5 项跳过**；其中 4 项为仅在 macOS 上执行的 native smoke tests，另 1 项为平台条件测试；Python 语法检查通过。
 
 macOS native smoke tests 直接调用进程身份、显示器枚举、Quartz modifier flags、当前输入状态与前台窗口探测，但不会在 CI 中发送真实桌面输入。
 
@@ -51,7 +57,7 @@ GitHub Actions 已运行 Windows portable tests 与 macOS native tests；macOS r
 - macOS 13 / 14 / 15 / 26 不同版本上的行为；
 - Apple Silicon 与 Intel 双架构实测。
 
-在这些实机项目完成前，仓库保持 experimental 标记。
+这些桌面实机项目仍待验证，不能用命令回归或 CI 结果替代。
 
 ## 安全说明
 

@@ -72,9 +72,9 @@ class Guard:
     def status(self) -> dict:
         return {
             "version": __version__,
-            "experimental": True,
+            "physical_desktop_validation": "pending",
             "paused": self.stopped.is_set() or self.paused_file.exists(),
-            "permissions": "all local files accessible to the current macOS user; desktop input additionally requires Accessibility",
+            "permissions": "all local files accessible to the current macOS user; desktop input additionally requires Accessibility; local commands require explicit local opt-in",
             "transport": "stdio only; authenticate the remote caller using Secure MCP Tunnel",
             "emergency_pause": "Pause.command or service_pause",
             "hotkey_registered": self.hotkey_ready,
