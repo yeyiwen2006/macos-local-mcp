@@ -286,7 +286,7 @@ def test_ordinary_descendants_are_cleaned_up(commands, tmp_path, root_exits):
     if not root_exits:
         commands.cancel(started["job_id"])
     result = finished(commands, started)
-    assert result["state"] == ("completed" if root_exits else "cancelled")
+    assert result["state"] == ("completed" if root_exits else "cancelled"), result
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         try:

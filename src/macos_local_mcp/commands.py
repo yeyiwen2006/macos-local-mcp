@@ -141,13 +141,14 @@ class PosixProcess:
             return True
 
     def _signal(self, sig: int) -> None:
-        # This check also accepts the unreaped zombie group leader. It never
-        # targets an arbitrary PID supplied by a caller or a reused PID.
-        if not self.identity.is_running():
+        # The direct child is deliberately NOT reaped before group cleanup, so
+        # its PID cannot be reused. On Darwin a zombie leader may no longer be
+        # queryable with getpgid(), even while its descendants keep the group
+        # alive. Signal the group we created, not a fresh lookup of that leader.
+        # Never signal again after wait() releases ownership of the PID.
+        if self.process.returncode is not None:
             return
         try:
-            if os.getpgid(self.pid) != self.pid:
-                raise RuntimeError("Command process group identity changed")
             os.killpg(self.pid, sig)
         except ProcessLookupError:
             pass
