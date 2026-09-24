@@ -32,6 +32,8 @@ The primary tools use the same names:
 | File metadata and directories | file_info, list_directory |
 | Text and binary reads | read_text_file, read_binary_file |
 | Create, replace, mkdir, move, Trash | write_file, create_directory, move_path, recycle_path |
+| Exact-match text editing | edit_text_file |
+| Search and verification | search_text, glob_files, file_hash |
 | Displays, windows, screenshots | desktop_monitors, desktop_windows, desktop_screenshot |
 | Focus a window and lock input | desktop_focus_window |
 | Mouse | desktop_click, desktop_move, desktop_drag, desktop_scroll |
@@ -60,6 +62,8 @@ Example `command_start` arguments for an installed Git:
 ```
 
 Poll the returned `job_id` with `command_poll`; pass the same ID to `command_cancel` to cancel it. **Starting is not success**: only `state=completed` with `exit_code=0` is successful. Nonzero exits, timeout, pause, cancellation and revoked approval remain distinct outcomes.
+
+`sandbox` selects an optional macOS Seatbelt (sandbox-exec) profile: `workspace-write` allows writes only inside cwd plus system temp directories and denies network; `read-only` denies all writes and network. `sandbox=None` (default) keeps raw current-user permissions. Profiles are deny-first, and the profile file is deleted when the job finishes. Known credential-shaped environment variables (GitHub/AWS/Anthropic/Google/Stripe tokens, SSH agent sockets, Tunnel/API keys) are stripped from the child environment in all modes.
 
 Executable and cwd must be absolute paths; arguments must be an array. No shell is implicitly inserted, so spaces, semicolons, `$()` and globs are literal. Explicitly authorize a shell such as `/bin/zsh` and its script arguments when pipelines or redirects are required. `environment` can supply build variables; known Tunnel/API credentials and service-private variables are stripped and cannot be overridden. Executable symlink invocation paths are preserved for Homebrew and virtual environments.
 
@@ -115,7 +119,7 @@ chmod +x *.command
 ./Start.command
 ~~~
 
-Setup.command creates an isolated .venv, installs Python dependencies, and downloads the official OpenAI Tunnel client for the current CPU architecture. Configure.command keeps the Tunnel ID in local private state and stores the runtime API key in macOS Keychain.
+Setup.command creates an isolated .venv, installs Python dependencies, and downloads the official OpenAI Tunnel client for the current CPU architecture, verifying the archive against the release SHA256SUMS.txt (mismatch deletes the download). Configure.command keeps the Tunnel ID in local private state and stores the runtime API key in macOS Keychain.
 
 Useful local controls:
 
@@ -125,6 +129,7 @@ Check.command        pause, permission, and Tunnel status
 Pause.command        local pause
 Resume.command       local resume
 Stop.command         stop the Tunnel
+Restore.command      browse/restore automatic file backups (local-only)
 ~~~
 
 ## File-safety semantics
@@ -135,7 +140,21 @@ Stop.command         stop the Tunnel
 - symlinks are not mutation entry points;
 - multiply linked, immutable, and extended-attribute-bearing files are refused by default to avoid losing special metadata during atomic replacement;
 - deletion goes to Trash and never falls back to permanent deletion;
-- the service source tree and .local credentials/backups/audit state are hidden from MCP file tools.
+- writes, mkdir, move and Trash refuse well-known credential trees (~/.ssh, ~/.gnupg, ~/.aws, ~/Library/Keychains, ~/Library/Cookies) even though reads stay unrestricted;
+- move_path falls back to copy-then-Trash across volumes and never overwrites;
+- the service source tree and .local credentials/backups/audit state are hidden from MCP file tools, and search_text/glob_files never descend into the state directory.
+
+### edit_text_file (preferred editing primitive)
+
+edit_text_file replaces an exact old_string with new_string, like a patch: the match must be unique (add surrounding lines to disambiguate, or pass replace_all=true), expected_modified_ns rejects stale edits, and the original is backed up automatically. For files up to 8 MiB of UTF-8 it avoids re-sending whole files and is far cheaper and safer than write_file for code changes.
+
+### search_text and glob_files
+
+search_text greps one file or a whole directory tree (case-insensitive by default, opt-in regex, binary files and junk directories such as .git/node_modules are skipped) and returns bounded file/line/text hits. glob_files lists files matching a shell glob. Both never follow directory symlinks and stop at fixed caps (200 hits / 4000 files / 500 matches), so a runaway search cannot flood the context.
+
+### Window-scoped screenshots and input bounds
+
+desktop_screenshot accepts target_window=true to capture only the locked target window, keeping other applications' pixels (private content and untrusted text) out of the model context. Mouse input must land inside the locked window's current bounds; clicking the menu bar or a same-process surface outside the target window is rejected (modal sheets in the target app are exempt because they legitimately extend past the window frame).
 
 macOS has many ACL, File Provider, iCloud, sandbox-container, and third-party filesystem edge cases. The current version does not claim complete coverage of all special metadata semantics.
 
@@ -144,17 +163,24 @@ macOS has many ACL, File Provider, iCloud, sandbox-container, and third-party fi
 Automated coverage currently includes:
 
 - file create/read/replace/backup and stale-write checks;
+- edit_text_file uniqueness, replace_all, stale-edit and binary rejection;
+- search_text/glob_files bounds, junk-directory and state-directory skipping;
+- credential-tree write rejection and cross-volume move fallback;
 - symlink/xattr protections;
 - pause and audit behavior;
 - one-use and expiration behavior for observation IDs;
 - screenshots not retargeting input;
+- window-scoped capture requires a locked target;
+- mouse input rejected outside the locked window bounds;
 - rejecting input after the user switches apps;
 - allowing input after returning to the target;
 - modal dialogs in the target app;
 - rejecting another ordinary window in the same app;
 - invalidating the target after process restart;
 - rechecking the target between typed characters;
-- mouse-up cleanup when a drag is interrupted.
+- mouse-up cleanup when a drag is interrupted;
+- Seatbelt read-only/workspace-write enforcement and profile cleanup (macOS);
+- credential environment filtering.
 
 GitHub Actions run portable tests and a macOS runner, with checks for PyObjC / Quartz / AppKit and the native APIs used by this project.
 
