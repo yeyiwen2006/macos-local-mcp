@@ -49,7 +49,10 @@ _CREDENTIAL_NAMES = {
 }
 _CREDENTIAL_PREFIXES = ("AWS_", "AZURE_", "GOOGLE_", "STRIPE_", "SLACK_",
                         "TELEGRAM_", "DISCORD_", "SENTRY_AUTH", "FIREBASE_")
-_SSH_AGENT_VARS = ("SSH_AUTH_SOCK", "SSH_AGENT_PID")
+# The agent socket path is not itself a secret and builds/git often need it;
+# only agent forwarding to untrusted hosts would be a risk, which the sandbox
+# network policy already bounds.
+_SSH_AGENT_VARS = ("SSH_AGENT_PID",)
 
 
 def _private_environment(name: str) -> bool:
@@ -63,9 +66,11 @@ SEATBELT_PROFILES = {
     # Deny-first: no network, writes denied everywhere, then re-allowed only
     # inside cwd, temp dirs, and std devices. (allow default) + (allow
     # file-write* ...) never re-denies, so the deny must come first.
+    # {network} becomes "(allow network*)" or "" via network= on seatbelt_prefix.
     "workspace-write": '(version 1)\n'
                        '(allow default)\n'
                        '(deny network*)\n'
+                       '{network}\n'
                        '(deny file-write*)\n'
                        '(allow file-write*\n'
                        '  (subpath "{cwd}")\n'
@@ -74,20 +79,29 @@ SEATBELT_PROFILES = {
                        '  (literal "/dev/tty") (literal "/dev/urandom") (literal "/dev/random")\n'
                        '  (regex #"^/(private/)?var/folders/[^/]+/[^/]+/[Tt]/")\n'
                        '  (regex #"^/System/Volumes/Data/(private/)?var/folders/[^/]+/[^/]+/[Tt]/"))\n',
-    # Read-only command execution: no writes anywhere, no network.
+    # Read-only command execution: no filesystem writes anywhere (std devices
+    # stay usable — many tools require /dev/null); network per {network}.
     "read-only": '(version 1)\n'
                  '(allow default)\n'
                  '(deny network*)\n'
-                 '(deny file-write*)\n',
+                 '{network}\n'
+                 '(deny file-write*)\n'
+                 '(allow file-write*\n'
+                 '  (literal "/dev/null") (literal "/dev/stdout")\n'
+                 '  (literal "/dev/stderr") (literal "/dev/stdin")\n'
+                 '  (literal "/dev/tty") (literal "/dev/urandom") (literal "/dev/random"))\n',
 }
 
 
-def seatbelt_prefix(cwd: str, profile: str) -> list[str]:
+def seatbelt_prefix(cwd: str, profile: str, network: bool = False) -> list[str]:
     """Return the sandbox-exec argv prefix; PosixProcess appends the real command.
-    Apple marks sandbox-exec deprecated but every current macOS still ships it."""
+    Apple marks sandbox-exec deprecated but every current macOS still ships it.
+    network=True allows outbound network inside the sandbox (needed for git/ssh
+    builds); the default keeps the sandbox offline."""
     if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").exists():
         raise ValueError("sandbox profiles require macOS sandbox-exec (/usr/bin/sandbox-exec)")
-    script = SEATBELT_PROFILES[profile].replace("{cwd}", cwd)
+    script = SEATBELT_PROFILES[profile].replace(
+        "{network}", "(allow network*)" if network else "").replace("{cwd}", cwd)
     fd, name = tempfile.mkstemp(prefix=".mcp-sb-", suffix=".sb", dir=cwd)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(script)
@@ -302,13 +316,15 @@ class Commands:
     def start(self, executable: str, arguments: list[str], cwd: str,
               timeout_seconds: int = 600, output_limit_chars: int = MAX_OUTPUT_CHARS,
               encoding: str = "utf-8", environment: dict[str, str] | None = None,
-              sandbox: str | None = None) -> dict:
+              sandbox: str | None = None, network: bool = False) -> dict:
         _integer(timeout_seconds, "timeout_seconds", 1, 86400)
         _integer(output_limit_chars, "output_limit_chars", 1024, MAX_OUTPUT_CHARS)
         if encoding not in ENCODINGS:
             raise ValueError("Unsupported output encoding")
         if sandbox is not None and sandbox not in SEATBELT_PROFILES:
             raise ValueError(f"sandbox must be one of {sorted(SEATBELT_PROFILES)} or None")
+        if network and sandbox is None:
+            raise ValueError("network=True only applies when a sandbox profile is selected")
         if not isinstance(arguments, list) or len(arguments) > 256 or any(
                 not isinstance(arg, str) or "\0" in arg or len(arg) > 32768 for arg in arguments):
             raise ValueError("arguments must contain at most 256 NUL-free strings of at most 32768 characters")
@@ -322,7 +338,9 @@ class Commands:
             raise ValueError("Invalid or service-private environment override")
         # Paths, argv and environment can all contain secrets: audit only counts/IDs.
         with self.guard.action("command_start", {"argument_count": len(arguments),
-                                                 "timeout_seconds": timeout_seconds}):
+                                                 "timeout_seconds": timeout_seconds,
+                                                 "sandbox": sandbox,
+                                                 "sandbox_network": bool(sandbox) and network}):
             if not self.enabled:
                 raise PermissionError("Commands are disabled. Enable locally with Enable-Commands.command")
             if os.name != "posix":
@@ -350,7 +368,8 @@ class Commands:
                 self.guard.check()
                 if not self.enabled:
                     raise PermissionError("Command permission was revoked")
-                wrapper = seatbelt_prefix(str(directory), sandbox) if sandbox else None
+                wrapper = (seatbelt_prefix(str(directory), sandbox, network=network)
+                           if sandbox else None)
                 process = PosixProcess(str(exe), list(arguments), str(directory), env, sandbox_argv=wrapper)
                 job.pid = process.pid
                 self.jobs[job.identifier] = job

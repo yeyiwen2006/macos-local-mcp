@@ -84,10 +84,10 @@ def test_bounds_are_refetched_when_window_moves():
 
 
 def test_env_filter_blocks_credentials_but_keeps_build_paths():
-    for name in ("GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY", "SSH_AUTH_SOCK",
+    for name in ("GITHUB_TOKEN", "AWS_SECRET_ACCESS_KEY",
                  "ANTHROPIC_API_KEY", "STRIPE_KEY", "OPENAI_API_KEY"):
         assert _private_environment(name), name
-    for name in ("PATH", "HOME", "LANG", "VIRTUAL_ENV", "SHELL", "TMPDIR"):
+    for name in ("PATH", "HOME", "LANG", "VIRTUAL_ENV", "SHELL", "TMPDIR", "SSH_AUTH_SOCK"):
         assert not _private_environment(name), name
 
 
@@ -132,3 +132,43 @@ def test_sandbox_validation_rejects_unknown_profile():
     with pytest.raises(ValueError, match="sandbox"):
         commands.start("/usr/bin/true", [], "/tmp", sandbox="hardened-network")
     assert commands.status()["sandbox_profiles"] == sorted(SEATBELT_PROFILES)
+
+
+def test_network_flag_requires_sandbox():
+    from macos_local_mcp.commands import Commands
+    from macos_local_mcp.guard import Guard
+    import tempfile
+    commands = Commands(Guard(Path(tempfile.mkdtemp()) / "state"))
+    with pytest.raises(ValueError, match="network"):
+        commands.start("/usr/bin/true", [], "/tmp", network=True)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt is macOS-only")
+def test_seatbelt_workspace_write_with_network_reaches_dns():
+    import socket  # noqa: F401
+    import tempfile
+    cwd = tempfile.mkdtemp(prefix="mcp-sb-net-")
+    prefix = seatbelt_prefix(cwd, "workspace-write", network=True)
+    from macos_local_mcp.commands import PosixProcess
+    proc = PosixProcess(
+        "/usr/bin/dscacheutil", ["-q", "host", "-a", "name", "localhost"],
+        cwd, dict(os.environ), sandbox_argv=prefix)
+    proc.process.wait(timeout=15)
+    out = os.read(proc.process.stdout.fileno(), 65536).decode(errors="replace")
+    proc.close()
+    assert "localhost" in out, "network-enabled sandbox could not even resolve localhost"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Seatbelt is macOS-only")
+def test_seatbelt_workspace_write_without_network_blocks_dns():
+    import tempfile
+    cwd = tempfile.mkdtemp(prefix="mcp-sb-nonet-")
+    prefix = seatbelt_prefix(cwd, "workspace-write", network=False)
+    from macos_local_mcp.commands import PosixProcess
+    proc = PosixProcess(
+        "/usr/bin/dscacheutil", ["-q", "host", "-a", "name", "example.com"],
+        cwd, dict(os.environ), sandbox_argv=prefix)
+    proc.process.wait(timeout=15)
+    out = os.read(proc.process.stdout.fileno(), 65536).decode(errors="replace")
+    proc.close()
+    assert "example.com" not in out, "default sandbox unexpectedly resolved a public host"
