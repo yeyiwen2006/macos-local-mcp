@@ -45,6 +45,13 @@ fi
 
 TUNNEL_ID="$(python3 -c 'import json; print(json.load(open(".local/connection.json"))["tunnel_id"])')"
 RUNTIME_KEY="$(security find-generic-password -s "macos-local-mcp-runtime" -a "$USER" -w)"
+# Remove stale per-start health URL files and rotate oversized tunnel logs.
+find .local -maxdepth 1 -name 'health-*.url' -type f -delete 2>/dev/null || true
+for log in .local/tunnel.stdout.log .local/tunnel.stderr.log; do
+  if [ -f "$log" ] && [ "$(stat -f %z "$log" 2>/dev/null || echo 0)" -gt 10485760 ]; then
+    mv "$log" "$log.1"
+  fi
+done
 HEALTH_FILE="$PWD/.local/health-$(date +%s)-$$.url"
 
 export CONTROL_PLANE_API_KEY="$RUNTIME_KEY"

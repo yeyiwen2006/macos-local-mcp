@@ -1,8 +1,10 @@
 """Opt-in, bounded current-user commands without a terminal or implicit shell.
 
 POSIX process groups contain ordinary children, not deliberately daemonized
-processes. This is not a sandbox. Output is memory-only; audit records exclude
-arguments, environment values and output. Normal shutdown closes all jobs.
+processes. This is not a sandbox, but an optional Seatbelt (sandbox-exec)
+profile can confine writes to the working directory and deny network. Output
+is memory-only; audit records exclude arguments, environment values and
+output. Normal shutdown closes all jobs.
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from uuid import uuid4
@@ -32,11 +35,63 @@ ENCODINGS = ("utf-8", "gb18030", "utf-16-le", "cp1252")
 _SECRET_ENV = {"OPENAI_API_KEY", "OPENAI_ADMIN_KEY", "RUNTIME_KEY", "RUNTIME_API_KEY",
                "TUNNEL_API_KEY", "MCP_COMMAND"}
 _PRIVATE_PREFIXES = ("MACOS_LOCAL_MCP_", "CONTROL_PLANE_", "MCP_TUNNEL_", "OPENAI_TUNNEL_")
+# Credential-shaped variables never pass through to command children. This is a
+# denylist rather than an allowlist because builds legitimately need most of the
+# environment, but the tokens most likely to sit in a developer shell are covered.
+_CREDENTIAL_NAMES = {
+    "GITHUB_TOKEN", "GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITLAB_TOKEN",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_API_KEY", "GEMINI_API_KEY",
+    "ANTHROPIC_API_KEY", "CLAUDE_API_KEY", "DEEPSEEK_API_KEY", "MOONSHOT_API_KEY",
+    "OPENROUTER_API_KEY", "HUGGING_FACE_HUB_TOKEN", "HF_TOKEN",
+    "NPM_TOKEN", "PYPI_TOKEN", "TWINE_PASSWORD", "SONAR_TOKEN",
+    "SSHPASS", "BROWSER_API_KEY",
+}
+_CREDENTIAL_PREFIXES = ("AWS_", "AZURE_", "GOOGLE_", "STRIPE_", "SLACK_",
+                        "TELEGRAM_", "DISCORD_", "SENTRY_AUTH", "FIREBASE_")
+_SSH_AGENT_VARS = ("SSH_AUTH_SOCK", "SSH_AGENT_PID")
 
 
 def _private_environment(name: str) -> bool:
     name = name.upper()
-    return name in _SECRET_ENV or name.startswith(_PRIVATE_PREFIXES)
+    return (name in _SECRET_ENV or name in _CREDENTIAL_NAMES or name in _SSH_AGENT_VARS
+            or name.startswith(_PRIVATE_PREFIXES) or any(
+                name.startswith(prefix) for prefix in _CREDENTIAL_PREFIXES))
+
+
+SEATBELT_PROFILES = {
+    # Deny-first: no network, writes denied everywhere, then re-allowed only
+    # inside cwd, temp dirs, and std devices. (allow default) + (allow
+    # file-write* ...) never re-denies, so the deny must come first.
+    "workspace-write": '(version 1)\n'
+                       '(allow default)\n'
+                       '(deny network*)\n'
+                       '(deny file-write*)\n'
+                       '(allow file-write*\n'
+                       '  (subpath "{cwd}")\n'
+                       '  (literal "/dev/null") (literal "/dev/stdout")\n'
+                       '  (literal "/dev/stderr") (literal "/dev/stdin")\n'
+                       '  (literal "/dev/tty") (literal "/dev/urandom") (literal "/dev/random")\n'
+                       '  (regex #"^/(private/)?var/folders/[^/]+/[^/]+/[Tt]/")\n'
+                       '  (regex #"^/System/Volumes/Data/(private/)?var/folders/[^/]+/[^/]+/[Tt]/"))\n',
+    # Read-only command execution: no writes anywhere, no network.
+    "read-only": '(version 1)\n'
+                 '(allow default)\n'
+                 '(deny network*)\n'
+                 '(deny file-write*)\n',
+}
+
+
+def seatbelt_prefix(cwd: str, profile: str) -> list[str]:
+    """Return the sandbox-exec argv prefix; PosixProcess appends the real command.
+    Apple marks sandbox-exec deprecated but every current macOS still ships it."""
+    if sys.platform != "darwin" or not Path("/usr/bin/sandbox-exec").exists():
+        raise ValueError("sandbox profiles require macOS sandbox-exec (/usr/bin/sandbox-exec)")
+    script = SEATBELT_PROFILES[profile].replace("{cwd}", cwd)
+    fd, name = tempfile.mkstemp(prefix=".mcp-sb-", suffix=".sb", dir=cwd)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(script)
+    return ["/usr/bin/sandbox-exec", "-f", name, "--"]
 
 
 def _integer(value: object, name: str, low: int, high: int) -> int:
@@ -116,9 +171,16 @@ class PosixProcess:
     psutil's identity-aware zombie check, signal the owned group, then wait().
     No preexec_fn is used in this multithreaded service.
     """
-    def __init__(self, executable: str, arguments: list[str], cwd: str, env: dict):
+    def __init__(self, executable: str, arguments: list[str], cwd: str, env: dict,
+                 sandbox_argv: list[str] | None = None):
+        prefix = list(sandbox_argv) if sandbox_argv else []
+        argv = [*prefix, executable, *arguments]
+        self.sandbox_profile_path = (
+            Path(sandbox_argv[2]) if sandbox_argv and len(sandbox_argv) > 2
+            and sandbox_argv[0] == "/usr/bin/sandbox-exec" and sandbox_argv[1] == "-f" else None
+        )
         self.process = subprocess.Popen(
-            [executable, *arguments], cwd=cwd, env=env, shell=False,
+            argv, cwd=cwd, env=env, shell=False,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             close_fds=True, start_new_session=True, bufsize=0)
         self.pid = self.process.pid
@@ -182,6 +244,11 @@ class PosixProcess:
         for stream in (self.process.stdout, self.process.stderr):
             if stream is not None:
                 stream.close()
+        if self.sandbox_profile_path is not None:
+            try:
+                self.sandbox_profile_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 class Commands:
@@ -211,7 +278,8 @@ class Commands:
                     "running": sum(not job.done.is_set() for job in self.jobs.values()),
                     "retained": len(self.jobs), "max_running": MAX_RUNNING,
                     "max_retained": MAX_RETAINED, "desktop_focus_required": False,
-                    "process_cleanup": "owned POSIX process group; not an OS sandbox"}
+                    "sandbox_profiles": sorted(SEATBELT_PROFILES),
+                    "process_cleanup": "owned POSIX process group; optional Seatbelt profile; not a hard boundary"}
 
     def _lookup(self, identifier: str) -> Job:
         if not isinstance(identifier, str):
@@ -233,11 +301,14 @@ class Commands:
 
     def start(self, executable: str, arguments: list[str], cwd: str,
               timeout_seconds: int = 600, output_limit_chars: int = MAX_OUTPUT_CHARS,
-              encoding: str = "utf-8", environment: dict[str, str] | None = None) -> dict:
+              encoding: str = "utf-8", environment: dict[str, str] | None = None,
+              sandbox: str | None = None) -> dict:
         _integer(timeout_seconds, "timeout_seconds", 1, 86400)
         _integer(output_limit_chars, "output_limit_chars", 1024, MAX_OUTPUT_CHARS)
         if encoding not in ENCODINGS:
             raise ValueError("Unsupported output encoding")
+        if sandbox is not None and sandbox not in SEATBELT_PROFILES:
+            raise ValueError(f"sandbox must be one of {sorted(SEATBELT_PROFILES)} or None")
         if not isinstance(arguments, list) or len(arguments) > 256 or any(
                 not isinstance(arg, str) or "\0" in arg or len(arg) > 32768 for arg in arguments):
             raise ValueError("arguments must contain at most 256 NUL-free strings of at most 32768 characters")
@@ -274,11 +345,13 @@ class Commands:
                         raise RuntimeError("Command job capacity reached")
                     del self.jobs[oldest]
                 job = Job(uuid4().hex, timeout_seconds, Output(output_limit_chars), Output(output_limit_chars))
-                self.guard.audit({"tool": "command_job", "job_id": job.identifier, "result": "starting"})
+                self.guard.audit({"tool": "command_job", "job_id": job.identifier,
+                                  "result": "starting", "sandbox": sandbox})
                 self.guard.check()
                 if not self.enabled:
                     raise PermissionError("Command permission was revoked")
-                process = PosixProcess(str(exe), list(arguments), str(directory), env)
+                wrapper = seatbelt_prefix(str(directory), sandbox) if sandbox else None
+                process = PosixProcess(str(exe), list(arguments), str(directory), env, sandbox_argv=wrapper)
                 job.pid = process.pid
                 self.jobs[job.identifier] = job
                 job.worker = threading.Thread(target=self._watch, args=(job, process, encoding),

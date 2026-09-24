@@ -18,7 +18,7 @@ MACOS_LOCAL_MCP_STATE="$PWD/.local" .venv/bin/python -c 'from macos_local_mcp.gu
 if ! find .local/tools -type f -name 'tunnel-client' -perm -111 2>/dev/null | grep -q .; then
   echo "Downloading the latest official OpenAI Tunnel client..."
   .venv/bin/python - <<'PY'
-import json, os, platform, re, urllib.request, zipfile
+import hashlib, json, os, platform, re, urllib.request, zipfile
 root = os.getcwd()
 arch = {"arm64": "arm64", "x86_64": "amd64"}.get(platform.machine())
 if not arch:
@@ -29,17 +29,44 @@ req = urllib.request.Request(
 )
 with urllib.request.urlopen(req, timeout=30) as response:
     release = json.load(response)
-pattern = re.compile(rf"^tunnel-client-v.*-darwin-{arch}\\.zip$")
+pattern = re.compile(rf"^tunnel-client-v.*-darwin-{arch}\.zip$")
 assets = [a for a in release.get("assets", []) if pattern.match(a.get("name", ""))]
 if len(assets) != 1:
     raise SystemExit("Official macOS Tunnel client release asset was not found.")
-url = assets[0]["browser_download_url"]
+asset = assets[0]
+url = asset["browser_download_url"]
 if not url.startswith("https://github.com/openai/tunnel-client/releases/download/"):
     raise SystemExit("Unexpected Tunnel client download location.")
 dest = os.path.join(root, ".local", "tools", release["tag_name"])
 os.makedirs(dest, exist_ok=True)
-archive = os.path.join(dest, "official-release.zip")
+archive = os.path.join(dest, asset["name"])
 urllib.request.urlretrieve(url, archive)
+
+# Verify the release SHA256SUMS.txt so a tampered download fails here.
+sums_name = "SHA256SUMS.txt"
+sums_req = urllib.request.Request(
+    f"https://github.com/openai/tunnel-client/releases/download/{release['tag_name']}/{sums_name}",
+    headers={"User-Agent": "macos-local-mcp"},
+)
+with urllib.request.urlopen(sums_req, timeout=30) as response:
+    sums_text = response.read().decode("utf-8")
+expected = None
+for line in sums_text.splitlines():
+    parts = line.split()
+    if len(parts) == 2 and parts[1].lstrip("*") == asset["name"]:
+        expected = parts[0].lower()
+        break
+if not expected:
+    raise SystemExit(f"{sums_name} has no entry for {asset['name']}; refusing to install.")
+digest = hashlib.sha256()
+with open(archive, "rb") as f:
+    while block := f.read(1 << 20):
+        digest.update(block)
+if digest.hexdigest() != expected:
+    os.unlink(archive)
+    raise SystemExit("SHA256 mismatch on the downloaded Tunnel client; download deleted.")
+print(f"Verified SHA256 for {asset['name']}.")
+
 with zipfile.ZipFile(archive) as z:
     z.extractall(dest)
 for dirpath, _, filenames in os.walk(dest):

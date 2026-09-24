@@ -92,6 +92,10 @@ class FakeBackend:
         self.events.append(("capture", bbox))
         return png(400, 200)
 
+    def capture_window_png(self, window_id):
+        self.events.append(("capture_window", window_id))
+        return png(800, 600)
+
     def mouse_move(self, x, y):
         self.events.append(("move", x, y))
 

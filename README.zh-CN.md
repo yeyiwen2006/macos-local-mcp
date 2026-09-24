@@ -32,6 +32,8 @@
 | 文件信息与目录 | file_info、list_directory |
 | 文本与二进制读取 | read_text_file、read_binary_file |
 | 创建、覆盖、目录、移动、废纸篓 | write_file、create_directory、move_path、recycle_path |
+| 精确文本编辑 | edit_text_file |
+| 搜索与校验 | search_text、glob_files、file_hash |
 | 显示器、窗口、截图 | desktop_monitors、desktop_windows、desktop_screenshot |
 | 激活窗口并锁定输入目标 | desktop_focus_window |
 | 鼠标 | desktop_click、desktop_move、desktop_drag、desktop_scroll |
@@ -60,6 +62,8 @@
 ```
 
 返回 `job_id` 后，用 `command_poll` 查询。同一个 `job_id` 可交给 `command_cancel`。**启动成功不等于命令成功**：只有 `state=completed` 且 `exit_code=0` 才算成功；非零退出码、超时、暂停、取消和许可撤销分别保留真实状态。
+
+`sandbox` 参数可选 macOS Seatbelt（sandbox-exec）配置：`workspace-write` 只允许写 cwd 和系统临时目录并禁止网络；`read-only` 禁止所有写入和网络。默认 `sandbox=None` 保持当前用户原始权限。配置采用 deny-first 顺序，任务结束后配置文件即被删除。已知凭据形态的环境变量（GitHub/AWS/Anthropic/Google/Stripe 令牌、SSH agent、Tunnel/API 密钥）在所有模式下都不会传给子进程。
 
 可执行文件和工作目录必须为绝对路径，参数必须是数组。服务不自动插入 shell，因此空格、分号、`$()` 和通配符不会被自动解释。确实需要管道或重定向时，应明确授权 `/bin/zsh` 等 shell 及其脚本参数。可通过 `environment` 传入构建所需环境变量；已知的 Tunnel/API 凭据和服务私有环境变量不会继承，也不允许覆盖。可执行文件的符号链接会保留调用路径，兼容 Homebrew 和虚拟环境。
 
@@ -115,7 +119,7 @@ chmod +x *.command
 ./Start.command
 ~~~
 
-Setup.command 会创建独立 .venv、安装 Python 依赖，并按 CPU 架构下载官方 OpenAI Tunnel client。Configure.command 把 Tunnel ID 保存到本地私有状态，把 runtime API key 保存到 macOS Keychain。
+Setup.command 会创建独立 .venv、安装 Python 依赖，并按 CPU 架构下载官方 OpenAI Tunnel client，下载后用官方 SHA256SUMS.txt 校验（不匹配即删除）。Configure.command 把 Tunnel ID 保存到本地私有状态，把 runtime API key 保存到 macOS Keychain。
 
 常用入口：
 
@@ -125,6 +129,7 @@ Check.command        检查暂停、权限和 Tunnel 状态
 Pause.command        本机暂停
 Resume.command       本机恢复
 Stop.command         停止 Tunnel
+Restore.command      浏览/恢复文件自动备份（仅本机）
 ~~~
 
 ## 文件安全语义
@@ -135,7 +140,21 @@ Stop.command         停止 Tunnel
 - symlink 不允许作为变更入口；
 - 多硬链接文件、immutable 文件以及带 extended attributes 的文件默认拒绝覆盖，避免原子替换丢失特殊元数据；
 - 删除只进入 Trash，失败时不会降级成永久删除；
-- 服务源码和 .local 中的凭据、备份、审计不会通过 MCP 文件工具开放。
+- 写入、建目录、移动和废纸篓拒绝常见凭据目录（~/.ssh、~/.gnupg、~/.aws、~/Library/Keychains、~/Library/Cookies），读取不受限制；
+- move_path 跨卷时自动回退为"复制到目标→fsync→改名→源文件进 Trash"，且从不覆盖目标；
+- 服务源码和 .local 中的凭据、备份、审计不会通过 MCP 文件工具开放；search_text / glob_files 也绝不会下钻到状态目录。
+
+### edit_text_file（首选编辑方式）
+
+edit_text_file 用精确的 old_string→new_string 做补丁式替换：匹配必须唯一（不唯一时补充上下文行，或传 replace_all=true 全部替换），expected_modified_ns 可拒绝基于旧内容的编辑，替换前自动备份。对 8 MiB 以内的 UTF-8 文本文件，它避免整文件重传，改代码比 write_file 更省、更安全。
+
+### search_text 与 glob_files
+
+search_text 对单个文件或整个目录树做有界 grep（默认忽略大小写，可选正则；跳过二进制文件和 .git/node_modules 等目录），返回带 file/line/text 的命中列表。glob_files 按通配符列出文件。两者都不跟随目录符号链接，且有固定上限（200 命中 / 4000 文件 / 500 结果），搜索失控不会刷爆上下文。
+
+### 窗口级截图与输入边界
+
+desktop_screenshot 支持 target_window=true，只截取锁定的目标窗口，把其他应用的画面（隐私内容和不可信文本）挡在模型上下文之外。鼠标输入必须落在锁定窗口的当前边界内；点菜单栏或同进程内目标窗口之外的区域会被拒绝（目标 App 的 modal 弹层豁免，因为合法弹层可能超出窗口边框）。
 
 macOS 的 ACL、File Provider、iCloud、sandbox container 和第三方文件系统语义很多，当前版本不声称覆盖全部特殊元数据场景。
 
@@ -144,17 +163,24 @@ macOS 的 ACL、File Provider、iCloud、sandbox container 和第三方文件系
 当前自动化测试覆盖：
 
 - 文件创建、读取、覆盖、备份和并发检查；
+- edit_text_file 唯一性、replace_all、旧内容拒绝和二进制拒绝；
+- search_text / glob_files 上限、垃圾目录与状态目录跳过；
+- 凭据目录写拒绝与跨卷移动回退；
 - symlink / xattr 等保护；
 - pause 和 audit；
 - observation_id 单次使用与过期；
 - “截图不能重新锁定目标”；
+- 窗口级截图必须先锁定目标；
+- 鼠标输入落在锁定窗口边界外被拒绝；
 - 用户切换到其他 App 后拒绝输入；
 - 切回目标后恢复输入；
 - 同一 App 的 modal dialog；
 - 同一 App 的另一个普通窗口拒绝；
 - 进程重启后旧 target lock 失效；
 - 输入过程中每个字符重新检查目标；
-- drag 中断后 mouse-up cleanup。
+- drag 中断后 mouse-up cleanup；
+- Seatbelt read-only / workspace-write 强制力与配置清理（macOS）；
+- 凭据环境变量过滤。
 
 GitHub Actions 会同时运行 portable tests 和 macOS runner 测试，并在 macOS runner 上验证 PyObjC / Quartz / AppKit 以及本项目使用的原生 API 是否存在。
 
