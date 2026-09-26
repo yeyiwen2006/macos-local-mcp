@@ -6,7 +6,7 @@ Current version: 0.3.0.
 
 ## 0.3.0 file editing and search (2026-09-26)
 
-The isolated Windows / Python 3.13.5 portable suite recorded **111 passed, 33 skipped**. Skips cover native macOS commands, desktop probes, ACL/xattr metadata, MCP entry-point execution, and unavailable local symlink privileges. Native macOS results are recorded by this PR’s Actions; portable results do not substitute for them.
+The isolated Windows / Python 3.13.5 portable suite recorded **115 passed, 33 skipped**. Skips cover native macOS commands, desktop probes, ACL/xattr metadata, MCP entry-point execution, and unavailable local symlink privileges. Native macOS results are recorded by this PR’s Actions; portable results do not substitute for them.
 
 New cases cover unique exact matching and overlapping ambiguity, Chinese/emoji, UTF-8 BOM, UTF-16 byte order, GB18030, newlines, version conflicts, backup failure, external mutation, pause, protected paths, search result/byte/entry/time limits, and content-free audit records. A real MCP stdio workflow covers discovery, search, read, edit, backup, stale-version rejection and pause; its macOS entry point runs only on a native runner.
 

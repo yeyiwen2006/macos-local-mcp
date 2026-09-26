@@ -70,7 +70,7 @@ def test_extended_attributes_are_rejected_when_present(tmp_path, monkeypatch):
     p = tmp_path / "x.txt"
     p.write_text("x")
     import macos_local_mcp.files as files_module
-    monkeypatch.setattr(files_module.os, "listxattr", lambda _p: ["com.example"], raising=False)
+    monkeypatch.setattr(files_module, "_has_xattrs", lambda _p: True)
     with pytest.raises(ValueError, match="extended attributes"):
         files.write(str(p), "y", overwrite=True)
 

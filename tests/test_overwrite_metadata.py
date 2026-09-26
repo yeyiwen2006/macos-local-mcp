@@ -4,7 +4,6 @@ import ctypes
 import errno
 import getpass
 import os
-from pathlib import Path
 import stat
 import subprocess
 import sys
@@ -28,19 +27,51 @@ def test_xattr_inspection_error_refuses_overwrite(sample, monkeypatch):
     files, path = sample
     def fail(_path):
         raise OSError("metadata unavailable")
-    monkeypatch.setattr(module.os, "listxattr", fail, raising=False)
+    monkeypatch.setattr(module, "_has_xattrs", fail)
     with pytest.raises(OSError, match="metadata unavailable"):
         files.write(str(path), "new", overwrite=True)
     assert path.read_bytes() == b"old"
 
 
-def test_darwin_missing_xattr_api_refuses_overwrite(sample, monkeypatch):
+@pytest.mark.parametrize("failure", [OSError("library unavailable"), AttributeError("flistxattr unavailable")])
+def test_darwin_missing_xattr_backend_refuses_overwrite(sample, monkeypatch, failure):
     files, path = sample
+    def fail(*_args, **_kwargs):
+        raise failure
     monkeypatch.setattr(module.sys, "platform", "darwin")
-    monkeypatch.delattr(module.os, "listxattr", raising=False)
+    monkeypatch.setattr(module.ctypes, "CDLL", fail)
     with pytest.raises(OSError, match="inspection is unavailable"):
         files.write(str(path), "new", overwrite=True)
     assert path.read_bytes() == b"old"
+
+
+@pytest.mark.parametrize("size", [0, 12, -1])
+def test_darwin_flistxattr_counts_metadata_and_preserves_errors(sample, monkeypatch, size):
+    _files, path = sample
+    opened = []
+    class Check:
+        def __call__(self, fd, names, capacity, options):
+            assert os.fstat(fd).st_size == 3
+            assert names is None and capacity == 0 and options == 0
+            opened.append(fd)
+            ctypes.set_errno(errno.EACCES if size < 0 else 0)
+            return size
+    class Library:
+        flistxattr = Check()
+    library = Library()
+    monkeypatch.setattr(module.sys, "platform", "darwin")
+    monkeypatch.delattr(module.os, "listxattr", raising=False)
+    monkeypatch.setattr(module.ctypes, "CDLL", lambda *args, **kwargs: library)
+    if size < 0:
+        with pytest.raises(OSError, match="Unable to inspect extended attributes") as failure:
+            module._has_xattrs(path)
+        assert failure.value.errno == errno.EACCES
+    else:
+        assert module._has_xattrs(path) is (size > 0)
+    assert library.flistxattr.argtypes == [ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    assert library.flistxattr.restype is ctypes.c_ssize_t
+    with pytest.raises(OSError):
+        os.fstat(opened[0])
 
 
 @pytest.mark.parametrize("result,error", [(1, 0), (None, errno.EACCES)])
@@ -59,7 +90,7 @@ def test_native_acl_check_presence_or_failure_refuses_overwrite(sample, monkeypa
         acl_get_fd = Check()
         acl_free = Free()
     monkeypatch.setattr(module.sys, "platform", "darwin")
-    monkeypatch.setattr(module.os, "listxattr", lambda _p: [], raising=False)
+    monkeypatch.setattr(module, "_has_xattrs", lambda _p: False)
     monkeypatch.setattr(module.ctypes, "CDLL", lambda *args, **kwargs: Library())
     with pytest.raises((OSError, ValueError), match="ACL"):
         files.write(str(path), "new", overwrite=True)
@@ -86,7 +117,7 @@ def test_native_absent_acl_is_distinguished_from_check_failure(sample, monkeypat
 def test_metadata_added_during_backup_refuses_commit(sample, monkeypatch):
     files, path = sample
     attributes = []
-    monkeypatch.setattr(module.os, "listxattr", lambda _p: list(attributes), raising=False)
+    monkeypatch.setattr(module, "_has_xattrs", lambda _p: bool(attributes))
     original_backup = files.backup
     def backup_then_change(p):
         result = original_backup(p)
@@ -115,14 +146,18 @@ native = pytest.mark.skipif(sys.platform != "darwin", reason="Actual macOS metad
 @pytest.mark.parametrize("attribute", ["com.example.mcp-test", "com.apple.ResourceFork"])
 def test_native_xattr_and_resource_fork_are_rejected(sample, attribute):
     files, path = sample
-    os.setxattr(path, attribute, b"metadata that must survive")
+    payload = b"metadata that must survive"
+    subprocess.run(["/usr/bin/xattr", "-wx", attribute, payload.hex(), str(path)], check=True)
     try:
+        assert module._has_xattrs(path)
         with pytest.raises(ValueError, match="extended attributes"):
             files.edit_text(str(path), "old", "new", files.info(str(path))["version"])
         assert path.read_bytes() == b"old"
-        assert os.getxattr(path, attribute) == b"metadata that must survive"
+        result = subprocess.run(["/usr/bin/xattr", "-px", attribute, str(path)],
+                                check=True, capture_output=True, text=True)
+        assert bytes.fromhex(result.stdout) == payload
     finally:
-        os.removexattr(path, attribute)
+        subprocess.run(["/usr/bin/xattr", "-d", attribute, str(path)], check=True)
 
 
 @native

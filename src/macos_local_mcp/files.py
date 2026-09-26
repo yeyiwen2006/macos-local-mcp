@@ -33,6 +33,31 @@ def _same_file(left: os.stat_result, right: os.stat_result) -> bool:
                ("st_dev", "st_ino", "st_size", "st_mtime_ns"))
 
 
+def _has_xattrs(p: Path) -> bool:
+    """Inspect Darwin xattrs natively; Python's os xattr helpers are Linux-only."""
+    if sys.platform != "darwin":
+        # Portable tests may run on Linux or Windows; this is not a Darwin check.
+        listxattr = getattr(os, "listxattr", None)
+        return bool(listxattr(p)) if listxattr is not None else False
+    try:
+        library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        list_xattrs = library.flistxattr
+    except (AttributeError, OSError) as exc:
+        raise OSError("Extended attribute inspection is unavailable") from exc
+    # Darwin sys/xattr.h: ssize_t flistxattr(int, char *, size_t, int).
+    list_xattrs.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    list_xattrs.restype = ctypes.c_ssize_t
+    fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        ctypes.set_errno(0)
+        size = list_xattrs(fd, None, 0, 0)
+        if size < 0:
+            raise OSError(ctypes.get_errno(), "Unable to inspect extended attributes", str(p))
+        return size > 0
+    finally:
+        os.close(fd)
+
+
 def _has_acl(p: Path) -> bool:
     """Inspect Darwin ACL metadata through an open fd and fail closed on errors."""
     library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
@@ -237,16 +262,7 @@ class Files:
         immutable = getattr(stat, "UF_IMMUTABLE", 0) | getattr(stat, "SF_IMMUTABLE", 0)
         if flags & immutable:
             raise ValueError("Immutable files cannot be overwritten")
-        # Portable Windows tests have no xattr API; on Darwin an unavailable or
-        # failed metadata check must never be mistaken for an ordinary file.
-        listxattr = getattr(os, "listxattr", None)
-        if listxattr is None:
-            if sys.platform == "darwin":
-                raise OSError("Extended attribute inspection is unavailable")
-            xattrs = []
-        else:
-            xattrs = listxattr(p)
-        if xattrs:
+        if _has_xattrs(p):
             raise ValueError("File has extended attributes; refusing an overwrite that could discard metadata")
         if sys.platform == "darwin" and _has_acl(p):
             raise ValueError("File has an ACL; refusing an overwrite that could discard metadata")
