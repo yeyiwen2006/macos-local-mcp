@@ -8,6 +8,8 @@ Current version: 0.3.0.
 
 The isolated Windows / Python 3.13.5 portable suite recorded **115 passed, 33 skipped**. Skips cover native macOS commands, desktop probes, ACL/xattr metadata, MCP entry-point execution, and unavailable local symlink privileges. Native macOS results are recorded by this PR’s Actions; portable results do not substitute for them.
 
+[GitHub Actions](https://github.com/yeyiwen2006/macos-local-mcp/actions/runs/36217850889) passed after the native xattr correction: **148 passed, no skips** on macOS 15 / Apple Silicon / Python 3.13.15, and **117 passed, 31 skipped** on Windows portable. Native cases create actual ACLs, extended attributes and resource forks, confirm that contents and metadata survive refused replacement, and exercise ordinary executable-mode preservation and the MCP editing workflow.
+
 New cases cover unique exact matching and overlapping ambiguity, Chinese/emoji, UTF-8 BOM, UTF-16 byte order, GB18030, newlines, version conflicts, backup failure, external mutation, pause, protected paths, search result/byte/entry/time limits, and content-free audit records. A real MCP stdio workflow covers discovery, search, read, edit, backup, stale-version rejection and pause; its macOS entry point runs only on a native runner.
 
 Independent static code review completed. Tests use separate checkouts and synthetic temporary files and do not upgrade a running installation. See [file tool contracts](docs/file-tools.md).
