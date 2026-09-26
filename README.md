@@ -2,9 +2,9 @@
 
 [简体中文](README.zh-CN.md) · [English](README.en.md)
 
-**中文：** 让 ChatGPT 在 Chat 模式中也可以通过 MCP 读取本机文件、写入文件、查看屏幕并操作 macOS 桌面。当前版本为0.2.0。
+**中文：** 让 ChatGPT 在 Chat 模式中也可以通过 MCP 读取本机文件、写入文件、查看屏幕并操作 macOS 桌面。当前版本为 0.3.0。
 
-**English:** Give ChatGPT in Chat mode MCP-based access to local files, file writes, screen viewing, and macOS desktop control. Current version: 0.2.0.
+**English:** Give ChatGPT in Chat mode MCP-based access to local files, file writes, screen viewing, and macOS desktop control. Current version: 0.3.0.
 
 **命令行 / Commands:** 新增 `command_start`、`command_poll`、`command_cancel`，可直接运行 Git、构建、测试等本机命令，无需终端焦点。默认关闭，运行 `Enable-Commands.command` 在本机授权；使用当前用户权限，不自动提权，也不是沙箱。
 
@@ -23,3 +23,9 @@ Opt-in local commands now support start, output/status polling, and cancellation
 **English:** This is a high-privilege local tool, not an operating-system sandbox. File tools operate with the current macOS user's file permissions. Granting **Accessibility** lets the host process control ordinary applications, while **Screen Recording** lets it observe screen and window contents. macOS TCC permissions are generally granted to the actual Terminal/iTerm/host process running MCP, so the permission scope can be broader than one Python script. Target locking, pause controls, backups, and audit logs reduce mistakes but do not create a low-privilege boundary. Pause the service around password managers, payments, sensitive accounts, health/financial information, or important production data.
 
 See [SECURITY.zh-CN.md](SECURITY.zh-CN.md) / [SECURITY.en.md](SECURITY.en.md) for details.
+
+## File editing and search / 文件编辑与搜索
+
+0.3.0 新增 `edit_text_file`、`search_files` 和 `search_text`，支持带版本检查的精确局部编辑、递归文件名搜索和有界文本搜索。直接使用文件接口，不要求开启命令执行。用法、编码和边界见[文件工具说明](docs/file-tools.md)。
+
+Version 0.3.0 adds exact partial edits with read-associated versions, recursive filename search, and bounded literal text search. Command opt-in is not required. See [file tools, encodings and limits](docs/file-tools.md).

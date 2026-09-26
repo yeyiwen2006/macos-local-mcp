@@ -58,9 +58,9 @@ def wait_output(commands, started, timeout=5):
 
 def test_version_and_readme_match():
     metadata = tomllib.loads((PROJECT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert metadata["project"]["version"] == __version__ == "0.2.0"
+    assert metadata["project"]["version"] == __version__
     text = (PROJECT / "README.md").read_text(encoding="utf-8")
-    assert "当前版本为0.2.0。" in text
+    assert f"当前版本为 {__version__}。" in text
     assert "当前 0.1.1 版本为" not in text
 
 
@@ -75,7 +75,7 @@ def test_disabled_by_default_and_local_control_requires_approval(commands, monke
     control_main(["enable-commands", "--accept-command-risk"])
     assert commands.enabled
     control_main(["status"])
-    assert '"version": "0.2.0"' in capsys.readouterr().out
+    assert f'"version": "{__version__}"' in capsys.readouterr().out
     control_main(["disable-commands"])
     assert not commands.enabled
 

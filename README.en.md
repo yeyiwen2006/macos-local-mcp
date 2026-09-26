@@ -4,7 +4,7 @@
 
 Give ChatGPT in Chat mode MCP-based access to local files, file writes, screen viewing, and macOS desktop control. The MCP surface is intentionally close to the Windows version, while the desktop backend uses Quartz, the macOS Accessibility API, and macOS privacy permissions.
 
-Current version: 0.2.0.
+Current version: 0.3.0.
 
 ## Permissions and risks
 
@@ -31,6 +31,8 @@ The primary tools use the same names:
 | --- | --- |
 | File metadata and directories | file_info, list_directory |
 | Text and binary reads | read_text_file, read_binary_file |
+| Recursive filename and text search | search_files, search_text |
+| Exact partial edits with a version check | edit_text_file |
 | Create, replace, mkdir, move, Trash | write_file, create_directory, move_path, recycle_path |
 | Displays, windows, screenshots | desktop_monitors, desktop_windows, desktop_screenshot |
 | Focus a window and lock input | desktop_focus_window |
@@ -190,3 +192,9 @@ See [SECURITY.en.md](SECURITY.en.md).
 ## License
 
 MIT License. See [LICENSE](LICENSE).
+
+## File editing and search (0.3.0)
+
+Use `search_files` or `search_text` to narrow the scope, then inspect text with `read_text_file` and pass that exact string `version` as `edit_text_file.expected_version`. Editing requires one unique exact match; reread after a conflict. Changed files are backed up, and untouched bytes, BOM and UTF-16 byte order are retained. Searches have result, scan and time limits; inspect skipped/truncated fields. These three tools do not require command opt-in. See [parameters, encodings and boundaries](docs/file-tools.md).
+
+On macOS, replacement refuses files with ACLs or extended attributes, including resource forks. Failure to inspect either metadata type also refuses the write. Ordinary file mode and executable bits are preserved.
