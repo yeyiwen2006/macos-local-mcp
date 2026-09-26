@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,8 @@ def test_text_write_read_backup_and_conflict(tmp_path):
     assert created["backup_path"] is None
     assert files.read_text(str(p))["text"] == "你好🙂"
 
+    # Fast consecutive writes can share an mtime on portable test filesystems.
+    os.utime(p, ns=(1_000_000_000, 1_000_000_000))
     before = files.info(str(p))["modified_ns"]
     replaced = files.write(str(p), "替换", overwrite=True, expected_modified_ns=before)
     assert Path(replaced["backup_path"]).read_bytes() == "你好🙂".encode()

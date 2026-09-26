@@ -4,7 +4,7 @@
 
 让 ChatGPT 在 Chat 模式中也可以通过 MCP 读取本机文件、写入文件、查看屏幕并操作 macOS 桌面。这个仓库与 Windows 版保持尽量一致的 MCP 工具接口，但桌面实现使用 macOS 的 Quartz、Accessibility API 和系统隐私权限。
 
-当前版本为0.2.0。
+当前版本为 0.3.0。
 
 ## 权限与风险
 
@@ -31,6 +31,8 @@
 | --- | --- |
 | 文件信息与目录 | file_info、list_directory |
 | 文本与二进制读取 | read_text_file、read_binary_file |
+| 递归文件名和文本搜索 | search_files、search_text |
+| 带版本检查的精确局部编辑 | edit_text_file |
 | 创建、覆盖、目录、移动、废纸篓 | write_file、create_directory、move_path、recycle_path |
 | 显示器、窗口、截图 | desktop_monitors、desktop_windows、desktop_screenshot |
 | 激活窗口并锁定输入目标 | desktop_focus_window |
@@ -133,7 +135,7 @@ Stop.command         停止 Tunnel
 - 覆盖前先保存本地备份；
 - expected_modified_ns 可用于检测读后修改；
 - symlink 不允许作为变更入口；
-- 多硬链接文件、immutable 文件以及带 extended attributes 的文件默认拒绝覆盖，避免原子替换丢失特殊元数据；
+- 多硬链接文件、immutable 文件以及带 ACL 或 extended attributes 的文件默认拒绝覆盖，避免原子替换丢失特殊元数据；检查 ACL 或扩展属性失败时也拒绝覆盖；
 - 删除只进入 Trash，失败时不会降级成永久删除；
 - 服务源码和 .local 中的凭据、备份、审计不会通过 MCP 文件工具开放。
 
@@ -190,3 +192,7 @@ GitHub Actions 会同时运行 portable tests 和 macOS runner 测试，并在 m
 ## 许可证
 
 MIT License，详见 [LICENSE](LICENSE)。
+
+## 文件编辑与搜索（0.3.0）
+
+先用 `search_files` 或 `search_text` 缩小范围，再用 `read_text_file` 读取所需正文，把同次读取返回的字符串 `version` 原样传给 `edit_text_file.expected_version`。编辑只接受唯一的精确匹配；冲突时重新读取。修改前备份，保留未修改字节、BOM 和 UTF-16 端序。搜索有结果数、扫描量和时间限制，需查看返回的跳过及截断信息。三个工具均不要求开启命令执行。详见[参数、编码与边界](docs/file-tools.md)。

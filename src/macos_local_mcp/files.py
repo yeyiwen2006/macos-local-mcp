@@ -3,17 +3,63 @@ from __future__ import annotations
 
 import base64
 import binascii
+import ctypes
+import errno
 import json
 import os
 from pathlib import Path
 import stat
+import sys
 import tempfile
 from uuid import uuid4
 
 from .guard import Guard, PROJECT
+from .text_edit import replace_text_bytes
 
 MAX_READ = 1024 * 1024
 MAX_WRITE = 8 * 1024 * 1024
+
+
+def _version(st: os.stat_result) -> str:
+    """A stat identity/version token, not a content hash."""
+    return "v1:" + ":".join(str(getattr(st, name)) for name in
+                            ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"))
+
+
+def _same_file(left: os.stat_result, right: os.stat_result) -> bool:
+    # Windows Python 3.13 reports ctime differently for paths and open fds.
+    # Compare ctime within each API across the read, and identity across APIs.
+    return all(getattr(left, name) == getattr(right, name) for name in
+               ("st_dev", "st_ino", "st_size", "st_mtime_ns"))
+
+
+def _has_acl(p: Path) -> bool:
+    """Inspect Darwin ACL metadata through an open fd and fail closed on errors."""
+    library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    get_acl = library.acl_get_fd
+    get_acl.argtypes = [ctypes.c_int]
+    get_acl.restype = ctypes.c_void_p
+    free_acl = library.acl_free
+    free_acl.argtypes = [ctypes.c_void_p]
+    free_acl.restype = ctypes.c_int
+    fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        ctypes.set_errno(0)
+        acl = get_acl(fd)
+        if not acl:
+            error = ctypes.get_errno()
+            # Darwin filesec_get_property uses ENOENT for an absent ACL.
+            # Using an already-open fd removes pathname-not-found ambiguity.
+            if error == errno.ENOENT:
+                return False
+            raise OSError(error, "Unable to inspect file ACL", str(p))
+        try:
+            return True
+        finally:
+            if free_acl(acl) != 0:
+                raise OSError(ctypes.get_errno(), "Unable to release file ACL", str(p))
+    finally:
+        os.close(fd)
 
 
 def lexical_local_path(value: str) -> Path:
@@ -74,6 +120,7 @@ class Files:
             "bytes": s.st_size,
             "modified_ns": s.st_mtime_ns,
             "created_ns": s.st_birthtime_ns if hasattr(s, "st_birthtime_ns") else s.st_ctime_ns,
+            "version": _version(s),
         }
 
     def list_directory(self, path: str, limit: int = 200, offset: int = 0) -> dict:
@@ -127,7 +174,11 @@ class Files:
         p = self.path(path)
         self.regular(p)
         lines, size, next_line = [], 0, None
+        before_path = p.stat()
         with p.open("r", encoding=encoding, errors="strict", newline="") as f:
+            before = os.fstat(f.fileno())
+            if not _same_file(before, before_path):
+                raise ValueError("File changed while opening; read it again")
             for number in range(1, start_line + max_lines + 1):
                 self.guard.check()
                 line = f.readline(MAX_READ + 1)
@@ -142,6 +193,8 @@ class Files:
                     break
                 lines.append(line)
                 size += len(line)
+            if _version(os.fstat(f.fileno())) != _version(before) or _version(p.stat()) != _version(before_path):
+                raise ValueError("File changed while reading; read it again")
         return {
             "path": str(p),
             "text": "".join(lines),
@@ -149,6 +202,7 @@ class Files:
             "lines": len(lines),
             "next_line": next_line,
             "encoding": encoding,
+            "version": _version(before_path),
         }
 
     def backup(self, p: Path) -> str:
@@ -183,12 +237,19 @@ class Files:
         immutable = getattr(stat, "UF_IMMUTABLE", 0) | getattr(stat, "SF_IMMUTABLE", 0)
         if flags & immutable:
             raise ValueError("Immutable files cannot be overwritten")
-        try:
-            xattrs = os.listxattr(p)
-        except (AttributeError, OSError):
+        # Portable Windows tests have no xattr API; on Darwin an unavailable or
+        # failed metadata check must never be mistaken for an ordinary file.
+        listxattr = getattr(os, "listxattr", None)
+        if listxattr is None:
+            if sys.platform == "darwin":
+                raise OSError("Extended attribute inspection is unavailable")
             xattrs = []
+        else:
+            xattrs = listxattr(p)
         if xattrs:
             raise ValueError("File has extended attributes; refusing an overwrite that could discard metadata")
+        if sys.platform == "darwin" and _has_acl(p):
+            raise ValueError("File has an ACL; refusing an overwrite that could discard metadata")
 
     def write(self, path: str, content: str, encoding: str = "utf-8", overwrite: bool = False,
               expected_modified_ns: int | None = None) -> dict:
@@ -204,6 +265,14 @@ class Files:
         if len(data) > MAX_WRITE:
             raise ValueError("Write limit is 8 MiB per call")
 
+        return self._write_bytes(path, data, overwrite, expected_modified_ns)
+
+    def _write_bytes(self, path: str, data: bytes, overwrite: bool = False,
+                     expected_modified_ns: int | None = None,
+                     expected_version: str | None = None) -> dict:
+        if len(data) > MAX_WRITE:
+            raise ValueError("Write limit is 8 MiB per call")
+
         p = self.path(path, mutation=True)
         if not p.parent.exists() or not p.parent.is_dir():
             raise FileNotFoundError(f"Parent directory does not exist: {p.parent}")
@@ -215,6 +284,8 @@ class Files:
             self.regular(p)
             self.ordinary_overwrite(p)
         if expected_modified_ns is not None and (before is None or before.st_mtime_ns != expected_modified_ns):
+            raise ValueError("File changed since it was read; read it again before replacing")
+        if expected_version is not None and (before is None or _version(before) != expected_version):
             raise ValueError("File changed since it was read; read it again before replacing")
 
         backup = self.backup(p) if before else None
@@ -229,10 +300,9 @@ class Files:
                 os.chmod(temp, stat.S_IMODE(before.st_mode))
             self.guard.check()
             if before:
+                self.ordinary_overwrite(p)
                 current = p.stat()
-                if (current.st_mtime_ns, current.st_size, current.st_ino) != (
-                    before.st_mtime_ns, before.st_size, before.st_ino
-                ):
+                if _version(current) != _version(before):
                     raise ValueError("File changed during backup; original left untouched")
                 os.replace(temp, p)
             else:
@@ -241,12 +311,48 @@ class Files:
         finally:
             if temp.exists():
                 temp.unlink()
+        after = p.stat()
         return {
             "path": str(p),
             "bytes": len(data),
             "backup_path": backup,
-            "modified_ns": p.stat().st_mtime_ns,
+            "modified_ns": after.st_mtime_ns,
+            "version": _version(after),
         }
+
+    def edit_text(self, path: str, old_text: str, new_text: str, expected_version: str,
+                  encoding: str = "utf-8-sig") -> dict:
+        """Replace one exact occurrence, retaining all bytes outside its span."""
+        if not isinstance(expected_version, str) or not expected_version:
+            raise ValueError("expected_version must be returned by file_info or read_text_file")
+        p = self.path(path, mutation=True)
+        self.regular(p)
+        self.ordinary_overwrite(p)
+        self.guard.check()
+        before_path = p.stat()
+        with p.open("rb") as stream:
+            before = os.fstat(stream.fileno())
+            if _version(before_path) != expected_version or not _same_file(before, before_path):
+                raise ValueError("File changed since it was read; read it again before editing")
+            if before.st_size > MAX_WRITE:
+                raise ValueError("Text edit limit is 8 MiB")
+            data = stream.read(MAX_WRITE + 1)
+            if len(data) > MAX_WRITE:
+                raise ValueError("Text edit limit is 8 MiB")
+            if _version(os.fstat(stream.fileno())) != _version(before) or _version(p.stat()) != expected_version:
+                raise ValueError("File changed while reading; read it again before editing")
+        updated, change = replace_text_bytes(data, old_text, new_text, encoding)
+        self.guard.check()
+        if len(updated) > MAX_WRITE:
+            raise ValueError("Text edit limit is 8 MiB")
+        if not change["changed"]:
+            self.ordinary_overwrite(p)
+            if _version(p.stat()) != expected_version:
+                raise ValueError("File changed while editing; read it again")
+            return {"path": str(p), "bytes": len(data), "backup_path": None,
+                    "modified_ns": before.st_mtime_ns, "version": expected_version, **change}
+        result = self._write_bytes(path, updated, overwrite=True, expected_version=expected_version)
+        return {**result, **change}
 
     def mkdir(self, path: str) -> dict:
         p = self.path(path, mutation=True)
